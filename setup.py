@@ -13,10 +13,10 @@ setup(
     ],
     install_requires=['setuptools'],
     zip_safe=True,
-    maintainer='antonio',
-    maintainer_email='antonio@todo.todo',
-    description='Driver EGM para ABB Robot',
-    license='TODO: License declaration',
+    maintainer='Bartek Łukawski',
+    maintainer_email='bwmn.peter@gmail.com',
+    description='EGM driver for ABB robots',
+    license='LGPL v2.1',
     extras_require={
         'test': [
             'pytest',
@@ -24,9 +24,8 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            # AQUÍ ESTÁ EL CAMBIO IMPORTANTE:
             'egm_driver = abb_egm_driver.egm_driver:main',
-            'keyboard_teleop = abb_egm_driver.keyboard_teleop:main', # <--- NUEVA LÍNEA
+            'keyboard_teleop = abb_egm_driver.keyboard_teleop:main',
         ],
     },
 )

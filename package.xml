@@ -3,9 +3,9 @@
 <package format="3">
   <name>abb_egm_driver</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
-  <maintainer email="antonio@todo.todo">antonio</maintainer>
-  <license>TODO: License declaration</license>
+  <description>EGM driver for ABB robots</description>
+  <maintainer email="bwmn.peter@gmail.com">Bartek Łukawski</maintainer>
+  <license>LGPL v2.1</license>
 
   <depend>rclpy</depend>
   <depend>std_msgs</depend>
