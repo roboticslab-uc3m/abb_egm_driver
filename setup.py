@@ -17,11 +17,6 @@ setup(
     maintainer_email='bwmn.peter@gmail.com',
     description='EGM driver for ABB robots',
     license='LGPL v2.1',
-    extras_require={
-        'test': [
-            'pytest',
-        ],
-    },
     entry_points={
         'console_scripts': [
             'egm_driver = abb_egm_driver.egm_driver:main',

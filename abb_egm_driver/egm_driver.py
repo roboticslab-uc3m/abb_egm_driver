@@ -8,6 +8,9 @@ import math
 import threading
 import time
 
+# default 4 ms period for EGM communication (250 Hz)
+EGM_PERIOD = 0.004
+
 # EMA factor (low-pass filter, lower is smoother)
 SMOOTH_FACTOR = 0.02
 
@@ -53,7 +56,7 @@ class EGMDriver(Node):
             self.get_logger().info(f'Publishing of robot state is enabled (publish_period: {self.publish_period} seconds).')
             self.publisher_joint = self.create_publisher(JointState, 'state/joint', 10)
             self.publisher_pose = self.create_publisher(Pose, 'state/pose', 10)
-            self.timer_pose = self.create_timer(self.publish_period, self.timer_callback)
+            self.timer = self.create_timer(self.publish_period, self.timer_callback)
 
         self.subscription = self.create_subscription(Pose, 'command/pose', self.listener_callback, 10)
 
@@ -138,7 +141,7 @@ class EGMDriver(Node):
                 self.current_send_orient = self.target_orient
 
                 egm.send_to_robot_cart(self.current_send_pos, self.current_send_orient) # type: ignore
-                time.sleep(0.004)
+                time.sleep(EGM_PERIOD)
 
 def main(args=None):
     rclpy.init(args=args)
@@ -151,6 +154,7 @@ def main(args=None):
     finally:
         node.running = False
         node.egm_thread.join()
+        node.timer.cancel()
         node.destroy_node()
         rclpy.shutdown()
 
