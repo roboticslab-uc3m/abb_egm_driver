@@ -1,6 +1,7 @@
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Pose
+from rcl_interfaces.msg import ParameterDescriptor
 from ABBRobotEGM import EGM
 import threading
 import time
@@ -8,15 +9,13 @@ import time
 # EMA factor (low-pass filter, lower is smoother)
 SMOOTH_FACTOR = 0.02
 
+# ROS state publish period (in seconds)
+PUBLISH_PERIOD = 0.01
+
 class EGMDriver(Node):
     def __init__(self):
         super().__init__('abb_egm_driver')
-
         self.get_logger().info('Starting EGM Driver...')
-
-        self.subscription = self.create_subscription(Pose, 'pose', self.listener_callback, 10)
-        self.publisher = self.create_publisher(Pose, 'state/pose', 10)
-        self.timer = self.create_timer(0.01, self.timer_callback)
 
         self.target_pos = None
         self.target_orient = None
@@ -24,6 +23,33 @@ class EGMDriver(Node):
         self.current_orient = None
         self.current_send_pos = None
         self.current_send_orient = None
+
+        smooth_factor_param = self.declare_parameter('smooth_factor', SMOOTH_FACTOR,
+                                                      ParameterDescriptor(description='Smoothing factor for low-pass filter (lower is smoother)',
+                                                                          additional_constraints='0.0 <= smooth_factor <= 1.0'))
+
+        self.smooth_factor = smooth_factor_param.get_parameter_value().double_value
+
+        if self.smooth_factor < 0.0 or self.smooth_factor > 1.0:
+            self.get_logger().warning('Invalid smooth_factor value. It must be between 0.0 and 1.0. Using default value: {}'.format(SMOOTH_FACTOR))
+            self.smooth_factor = SMOOTH_FACTOR
+        else:
+            self.get_logger().info(f'Using smooth_factor: {self.smooth_factor}')
+
+        publish_period_param = self.declare_parameter('publish_period', PUBLISH_PERIOD,
+                                                      ParameterDescriptor(description='Period for publishing robot state (in seconds, use <= 0 for no publishing)',
+                                                                          read_only=True))
+
+        self.publish_period = publish_period_param.get_parameter_value().double_value
+
+        if self.publish_period <= 0.0:
+            self.get_logger().info('Publishing of robot state is disabled (publish_period <= 0).')
+        else:
+            self.get_logger().info(f'Publishing of robot state is enabled (publish_period: {self.publish_period} seconds).')
+            self.publisher = self.create_publisher(Pose, 'state/pose', 10)
+            self.timer = self.create_timer(self.publish_period, self.timer_callback)
+
+        self.subscription = self.create_subscription(Pose, 'pose', self.listener_callback, 10)
 
         self.running = True
         self.egm_thread = threading.Thread(target=self.run_egm_loop)
@@ -47,8 +73,8 @@ class EGMDriver(Node):
             msg.orientation.z = self.current_orient[3]
             self.publisher.publish(msg)
 
-    def interpolate(self, current, target, factor):
-        return current + (target - current) * factor
+    def filter(self, current, target):
+        return current + (target - current) * self.smooth_factor
 
     def run_egm_loop(self):
         with EGM() as egm:
@@ -94,7 +120,7 @@ class EGMDriver(Node):
                     self.target_orient = self.current_send_orient
 
                 # Apply low-pass filter (exponential moving average) to position
-                self.current_send_pos = [self.interpolate(self.current_send_pos[i], self.target_pos[i], SMOOTH_FACTOR) for i in range(3)] # type: ignore
+                self.current_send_pos = [self.filter(self.current_send_pos[i], self.target_pos[i]) for i in range(3)] # type: ignore
                 self.current_send_orient = self.target_orient
 
                 egm.send_to_robot_cart(self.current_send_pos, self.current_send_orient) # type: ignore
