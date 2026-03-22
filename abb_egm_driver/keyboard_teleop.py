@@ -5,37 +5,39 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Pose
 
-# Configuración de teclas
-msg = """
+help = """
 ---------------------------
-CONTROL MANUAL DE ROBOT ABB
+MANUAL CONTROL OF ABB ROBOT
 ---------------------------
-Moverse:
+Motion:
    w
  a s d    (X / Y)
 
-Subir/Bajar:
+Up/Down:
    q
    e      (Z)
 
-ESPACIO: Parada de Emergencia (Vuelve a Home)
-CTRL-C: Salir
+SPACE: Emergency Stop (Return to Home)
+CTRL-C: Exit
 """
 
-# Mapa de teclas -> Movimiento (x, y, z) en MILÍMETROS por pulsación
 MOVE_BINDINGS = {
-    'w': ( 0.05,  0.0,  0.0),  # Adelante (+X) 5cm
-    's': (-0.05,  0.0,  0.0),  # Atrás (-X)
-    'a': ( 0.0,   0.05, 0.0),  # Izquierda (+Y)
-    'd': ( 0.0,  -0.05, 0.0),  # Derecha (-Y)
-    'q': ( 0.0,   0.0,  0.05), # Arriba (+Z)
-    'e': ( 0.0,   0.0, -0.05), # Abajo (-Z)
+    'w': ( 0.05,  0.0,  0.0),  # Forward (+X)
+    's': (-0.05,  0.0,  0.0),  # Backward (-X)
+    'a': ( 0.0,   0.05, 0.0),  # Left (+Y)
+    'd': ( 0.0,  -0.05, 0.0),  # Right (-Y)
+    'q': ( 0.0,   0.0,  0.05), # Up (+Z)
+    'e': ( 0.0,   0.0, -0.05), # Down (-Z)
 }
 
-# Posición inicial (Debe coincidir aprox con donde está tu robot ahora)
 HOME_X = 0.45
 HOME_Y = 0.0
 HOME_Z = 0.45
+
+HOME_RW = 0.0
+HOME_RX = 0.0
+HOME_RY = 1.0
+HOME_RZ = 0.0
 
 def getKey(settings):
     tty.setraw(sys.stdin.fileno())
@@ -46,25 +48,34 @@ def getKey(settings):
 class KeyboardCommander(Node):
     def __init__(self):
         super().__init__('keyboard_teleop')
-        self.publisher_ = self.create_publisher(Pose, 'pose', 10)
+
+        self.publisher = self.create_publisher(Pose, 'command/pose', 10)
+
         self.x = HOME_X
         self.y = HOME_Y
         self.z = HOME_Z
-        print(msg)
+
+        self.rw = HOME_RW
+        self.rx = HOME_RX
+        self.ry = HOME_RY
+        self.rz = HOME_RZ
+
+        print(help)
 
     def publish_pos(self):
         pose = Pose()
+
         pose.position.x = self.x
         pose.position.y = self.y
         pose.position.z = self.z
-        # Orientación fija mirando abajo
-        pose.orientation.w = 0.0
-        pose.orientation.x = 0.0
-        pose.orientation.y = 1.0
-        pose.orientation.z = 0.0
 
-        self.publisher_.publish(pose)
-        print(f'Moviendo a: X={self.x:.2f} Y={self.y:.2f} Z={self.z:.2f}\r')
+        pose.orientation.w = self.rw
+        pose.orientation.x = self.rx
+        pose.orientation.y = self.ry
+        pose.orientation.z = self.rz
+
+        self.publisher.publish(pose)
+        print(f'Target: X={self.x:.2f} Y={self.y:.2f} Z={self.z:.2f}\r')
 
 def main():
     settings = termios.tcgetattr(sys.stdin)
@@ -72,7 +83,6 @@ def main():
     node = KeyboardCommander()
 
     try:
-        # Enviamos la posición inicial al arrancar
         node.publish_pos()
 
         while True:
@@ -86,11 +96,16 @@ def main():
                 node.publish_pos()
 
             elif key == ' ':
-                # Reset a casa
                 node.x = HOME_X
                 node.y = HOME_Y
                 node.z = HOME_Z
-                print("\n¡RESET A HOME!\n")
+
+                node.rw = HOME_RW
+                node.rx = HOME_RX
+                node.ry = HOME_RY
+                node.rz = HOME_RZ
+
+                print("\nRESET TO HOME!\n")
                 node.publish_pos()
 
             elif key == '\x03': # CTRL-C

@@ -55,7 +55,7 @@ class EGMDriver(Node):
             self.publisher_pose = self.create_publisher(Pose, 'state/pose', 10)
             self.timer_pose = self.create_timer(self.publish_period, self.timer_callback)
 
-        self.subscription = self.create_subscription(Pose, 'pose', self.listener_callback, 10)
+        self.subscription = self.create_subscription(Pose, 'command/pose', self.listener_callback, 10)
 
         self.running = True
         self.egm_thread = threading.Thread(target=self.run_egm_loop)
