@@ -46,7 +46,7 @@ def getKey(settings):
 class KeyboardCommander(Node):
     def __init__(self):
         super().__init__('keyboard_teleop')
-        self.publisher_ = self.create_publisher(Pose, 'robot_command', 10)
+        self.publisher_ = self.create_publisher(Pose, 'pose', 10)
         self.x = HOME_X
         self.y = HOME_Y
         self.z = HOME_Z

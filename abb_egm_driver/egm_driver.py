@@ -12,12 +12,16 @@ class EGMDriver(Node):
     def __init__(self):
         super().__init__('abb_egm_driver')
 
-        self.subscription = self.create_subscription(Pose, 'pose', self.listener_callback, 10)
-
         self.get_logger().info('Starting EGM Driver...')
+
+        self.subscription = self.create_subscription(Pose, 'pose', self.listener_callback, 10)
+        self.publisher = self.create_publisher(Pose, 'state/pose', 10)
+        self.timer = self.create_timer(0.01, self.timer_callback)
 
         self.target_pos = None
         self.target_orient = None
+        self.current_pos = None
+        self.current_orient = None
         self.current_send_pos = None
         self.current_send_orient = None
 
@@ -30,6 +34,18 @@ class EGMDriver(Node):
     def listener_callback(self, msg):
         self.target_pos = [msg.position.x * 1000.0, msg.position.y * 1000.0, msg.position.z * 1000.0]
         self.target_orient = [msg.orientation.w, msg.orientation.x, msg.orientation.y, msg.orientation.z]
+
+    def timer_callback(self):
+        if self.current_pos is not None and self.current_orient is not None:
+            msg = Pose()
+            msg.position.x = self.current_pos[0] / 1000.0
+            msg.position.y = self.current_pos[1] / 1000.0
+            msg.position.z = self.current_pos[2] / 1000.0
+            msg.orientation.w = self.current_orient[0]
+            msg.orientation.x = self.current_orient[1]
+            msg.orientation.y = self.current_orient[2]
+            msg.orientation.z = self.current_orient[3]
+            self.publisher.publish(msg)
 
     def interpolate(self, current, target, factor):
         return current + (target - current) * factor
@@ -49,21 +65,21 @@ class EGMDriver(Node):
                     continue
 
                 # Current actual pose
-                robot_pos = [state.cartesian.pos.x, state.cartesian.pos.y, state.cartesian.pos.z]
-                robot_orient = [state.cartesian.orient.u0, state.cartesian.orient.u1, state.cartesian.orient.u2, state.cartesian.orient.u3]
+                self.current_pos = [state.cartesian.pos.x, state.cartesian.pos.y, state.cartesian.pos.z]
+                self.current_orient = [state.cartesian.orient.u0, state.cartesian.orient.u1, state.cartesian.orient.u2, state.cartesian.orient.u3]
 
                 # PHASE 1: STARTUP (copy whatever the robot is doing to avoid initial jerky motion)
                 if startup_counter < INITIAL_STABILIZATION_CYCLES:
-                    self.current_send_pos = robot_pos
-                    self.current_send_orient = robot_orient
+                    self.current_send_pos = self.current_pos
+                    self.current_send_orient = self.current_orient
 
                     # Ignore ROS commands until we have a stable reading from the robot
                     if self.target_pos is None:
-                        self.target_pos = robot_pos
-                        self.target_orient = robot_orient
+                        self.target_pos = self.current_pos
+                        self.target_orient = self.current_orient
 
                     startup_counter += 1
-                    egm.send_to_robot_cart(robot_pos, robot_orient) # type: ignore
+                    egm.send_to_robot_cart(self.current_pos, self.current_orient) # type: ignore
                     continue
 
                 if notify_initial_startup:
