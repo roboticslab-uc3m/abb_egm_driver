@@ -1,8 +1,10 @@
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Pose
+from sensor_msgs.msg import JointState
 from rcl_interfaces.msg import ParameterDescriptor
 from ABBRobotEGM import EGM
+import math
 import threading
 import time
 
@@ -17,12 +19,15 @@ class EGMDriver(Node):
         super().__init__('abb_egm_driver')
         self.get_logger().info('Starting EGM Driver...')
 
-        self.target_pos = None
-        self.target_orient = None
+        self.current_joint_position = None
         self.current_pos = None
         self.current_orient = None
+
         self.current_send_pos = None
         self.current_send_orient = None
+
+        self.target_pos = None
+        self.target_orient = None
 
         smooth_factor_param = self.declare_parameter('smooth_factor', SMOOTH_FACTOR,
                                                       ParameterDescriptor(description='Smoothing factor for low-pass filter (lower is smoother)',
@@ -46,8 +51,9 @@ class EGMDriver(Node):
             self.get_logger().info('Publishing of robot state is disabled (publish_period <= 0).')
         else:
             self.get_logger().info(f'Publishing of robot state is enabled (publish_period: {self.publish_period} seconds).')
-            self.publisher = self.create_publisher(Pose, 'state/pose', 10)
-            self.timer = self.create_timer(self.publish_period, self.timer_callback)
+            self.publisher_joint = self.create_publisher(JointState, 'state/joint', 10)
+            self.publisher_pose = self.create_publisher(Pose, 'state/pose', 10)
+            self.timer_pose = self.create_timer(self.publish_period, self.timer_callback)
 
         self.subscription = self.create_subscription(Pose, 'pose', self.listener_callback, 10)
 
@@ -62,16 +68,24 @@ class EGMDriver(Node):
         self.target_orient = [msg.orientation.w, msg.orientation.x, msg.orientation.y, msg.orientation.z]
 
     def timer_callback(self):
+        if self.current_joint_position is not None:
+            joint_msg = JointState()
+            joint_msg.position = list(map(math.radians, self.current_joint_position))
+            self.publisher_joint.publish(joint_msg)
+
         if self.current_pos is not None and self.current_orient is not None:
-            msg = Pose()
-            msg.position.x = self.current_pos[0] / 1000.0
-            msg.position.y = self.current_pos[1] / 1000.0
-            msg.position.z = self.current_pos[2] / 1000.0
-            msg.orientation.w = self.current_orient[0]
-            msg.orientation.x = self.current_orient[1]
-            msg.orientation.y = self.current_orient[2]
-            msg.orientation.z = self.current_orient[3]
-            self.publisher.publish(msg)
+            pose_msg = Pose()
+
+            pose_msg.position.x = self.current_pos[0] / 1000.0
+            pose_msg.position.y = self.current_pos[1] / 1000.0
+            pose_msg.position.z = self.current_pos[2] / 1000.0
+
+            pose_msg.orientation.w = self.current_orient[0]
+            pose_msg.orientation.x = self.current_orient[1]
+            pose_msg.orientation.y = self.current_orient[2]
+            pose_msg.orientation.z = self.current_orient[3]
+
+            self.publisher_pose.publish(pose_msg)
 
     def filter(self, current, target):
         return current + (target - current) * self.smooth_factor
@@ -90,7 +104,7 @@ class EGMDriver(Node):
                     self.get_logger().warning('Failed to receive robot state. Retrying...')
                     continue
 
-                # Current actual pose
+                self.current_joint_position = state.joint_angles
                 self.current_pos = [state.cartesian.pos.x, state.cartesian.pos.y, state.cartesian.pos.z]
                 self.current_orient = [state.cartesian.orient.u0, state.cartesian.orient.u1, state.cartesian.orient.u2, state.cartesian.orient.u3]
 
