@@ -8,6 +8,9 @@ import math
 import threading
 import time
 
+# default EGM communication port
+EMG_PORT = 6510
+
 # default 4 ms period for EGM communication (250 Hz)
 EGM_PERIOD = 0.004
 
@@ -21,6 +24,18 @@ class EGMDriver(Node):
     def __init__(self):
         super().__init__('abb_egm_driver')
         self.get_logger().info('Starting EGM Driver...')
+
+        egm_port_param = self.declare_parameter('egm_port', EMG_PORT,
+                                                ParameterDescriptor(description='Port for EGM communication',
+                                                                    read_only=True))
+
+        self.egm_port = egm_port_param.get_parameter_value().integer_value
+
+        if self.egm_port <= 0 or self.egm_port > 65535:
+            self.get_logger().warning(f'Invalid EGM port number. It must be between 1 and 65535. Using default port: {EMG_PORT}')
+            self.egm_port = EMG_PORT
+        else:
+            self.get_logger().info(f'Using EGM port: {self.egm_port}')
 
         self.current_joint_position = None
         self.current_pos = None
@@ -39,7 +54,7 @@ class EGMDriver(Node):
         self.smooth_factor = smooth_factor_param.get_parameter_value().double_value
 
         if self.smooth_factor < 0.0 or self.smooth_factor > 1.0:
-            self.get_logger().warning('Invalid smooth_factor value. It must be between 0.0 and 1.0. Using default value: {}'.format(SMOOTH_FACTOR))
+            self.get_logger().warning(f'Invalid smooth_factor value. It must be between 0.0 and 1.0. Using default value: {SMOOTH_FACTOR}')
             self.smooth_factor = SMOOTH_FACTOR
         else:
             self.get_logger().info(f'Using smooth_factor: {self.smooth_factor}')
@@ -94,7 +109,7 @@ class EGMDriver(Node):
         return current + (target - current) * self.smooth_factor
 
     def run_egm_loop(self):
-        with EGM() as egm:
+        with EGM(port=self.egm_port) as egm:
             self.get_logger().info('Waiting response from robot...')
 
             startup_counter = 0
