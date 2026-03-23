@@ -1,0 +1,45 @@
+MODULE MainModule
+    VAR egmident egmID1;
+    VAR egmstate egmSt1;
+
+    CONST pose pose0:=[[0,0,0],[1,0,0,0]];
+    CONST egm_minmax egm_minmax_lin_rot:=[-1E-9,+1E-9];
+
+    PERS dnum DnumInData{40};
+    VAR num op:=1;
+
+    PROC main()
+        ! Before EGM guidance, the robot has to stop on a fine point
+        MoveJ CRobT(),v100,fine,tool0;
+
+        EGMReset egmID1;
+        EGMGetId egmID1;
+
+        egmSt1:=EGMGetState(egmID1);
+
+        IF egmSt1<=EGM_STATE_CONNECTED THEN
+            EGMSetupUC ROB_1,egmID1,"default","UCdevice"\Pose;
+        ENDIF
+
+!         WaitDI diEGM,1;
+
+        WHILE TRUE DO
+            TEST op
+            CASE 1:
+                EGMActPose egmID1\StreamStart\Tool:=tool0\WObj:=wobj0
+                           \DOToSensor:=doEGM\DIFromSensor:=diEGM,
+                           pose0,EGM_FRAME_WOBJ,pose0,EGM_FRAME_WOBJ
+                           \X:=egm_minmax_lin_rot\Y:=egm_minmax_lin_rot\Z:=egm_minmax_lin_rot
+                           \Rx:=egm_minmax_lin_rot\Ry:=egm_minmax_lin_rot\Rz:=egm_minmax_lin_rot
+                           \LpFilter:=20\SampleRate:=4\MaxPosDeviation:=1000\MaxSpeedDeviation:=1000;
+
+                EGMRunPose egmID1,EGM_STOP_HOLD\X\Y\Z\Rx\Ry\Rz\RampInTime:=0.05;
+                WaitDI diEGM,1;
+                EGMStop egmID1,EGM_STOP_HOLD;
+            DEFAULT:
+            ENDTEST
+
+            TPWrite DNumToStr(DnumInData{0}, 10);
+        ENDWHILE
+    ENDPROC
+ENDMODULE

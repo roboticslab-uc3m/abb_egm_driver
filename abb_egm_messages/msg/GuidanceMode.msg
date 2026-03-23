@@ -1,0 +1,5 @@
+uint8 POSE_GUIDANCE=1
+uint8 JOINT_GUIDANCE=2
+uint8 PATH_CORRECTION=3
+
+uint8 mode

@@ -3,6 +3,8 @@ from rclpy.node import Node
 from geometry_msgs.msg import Pose
 from sensor_msgs.msg import JointState
 from rcl_interfaces.msg import ParameterDescriptor
+from abb_egm_messages.msg import GuidanceMode
+from abb_egm_messages.srv import SwitchMode
 from ABBRobotEGM import EGM
 import math
 import threading
@@ -75,6 +77,8 @@ class EGMDriver(Node):
 
         self.subscription = self.create_subscription(Pose, 'command/pose', self.listener_callback, 10)
 
+        self.switch_mode_service = self.create_service(SwitchMode, 'switch_mode', self.handle_switch_mode)
+
         self.running = True
         self.egm_thread = threading.Thread(target=self.run_egm_loop)
         self.egm_thread.start()
@@ -84,6 +88,9 @@ class EGMDriver(Node):
     def listener_callback(self, msg):
         self.target_pos = [msg.position.x * 1000.0, msg.position.y * 1000.0, msg.position.z * 1000.0]
         self.target_orient = [msg.orientation.w, msg.orientation.x, msg.orientation.y, msg.orientation.z]
+
+    def handle_switch_mode(self, request, response):
+        pass
 
     def timer_callback(self):
         if self.current_joint_position is not None:
