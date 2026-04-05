@@ -4,6 +4,7 @@
   <name>abb_egm_driver</name>
   <version>0.0.0</version>
   <description>EGM driver for ABB robots</description>
+  <author>Antonio Balboa Parra</author>
   <maintainer email="bwmn.peter@gmail.com">Bartek Łukawski</maintainer>
   <license>LGPL v2.1</license>
 
