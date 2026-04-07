@@ -1,4 +1,4 @@
-MODULE MainModule
+MODULE PoseCommander
     VAR egmident egmID1;
     VAR egmstate egmSt1;
 

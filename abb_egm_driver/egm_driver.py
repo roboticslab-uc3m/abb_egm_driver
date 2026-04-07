@@ -1,12 +1,18 @@
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Pose
+from std_msgs.msg import Float32MultiArray
 from sensor_msgs.msg import JointState
 from rcl_interfaces.msg import ParameterDescriptor
 from ABBRobotEGM import EGM
+from enum import Enum
 import math
 import threading
 import time
+
+class CommandMode(Enum):
+    POSE = 'pose'
+    JOINT = 'joint'
 
 # default EGM communication port
 EMG_PORT = 6510
@@ -19,6 +25,9 @@ SMOOTH_FACTOR = 0.02
 
 # ROS state publish period (in seconds)
 PUBLISH_PERIOD = 0.01
+
+# default guidance mode for incoming commands (pose or joint)
+EGM_MODE = CommandMode.POSE
 
 class EGMDriver(Node):
     def __init__(self):
@@ -41,9 +50,11 @@ class EGMDriver(Node):
         self.current_pos = None
         self.current_orient = None
 
+        self.current_send_joint_position = None
         self.current_send_pos = None
         self.current_send_orient = None
 
+        self.target_joint_position = None
         self.target_pos = None
         self.target_orient = None
 
@@ -73,7 +84,26 @@ class EGMDriver(Node):
             self.publisher_pose = self.create_publisher(Pose, 'state/pose', 10)
             self.timer = self.create_timer(self.publish_period, self.timer_callback)
 
-        self.subscription = self.create_subscription(Pose, 'command/pose', self.listener_callback, 10)
+        command_mode_param = self.declare_parameter('command_mode', 'pose',
+                                                    ParameterDescriptor(description='Control mode for incoming commands (pose or joint)',
+                                                                        additional_constraints='command_mode must be either "pose" or "joint"',
+                                                                        read_only=True))
+
+        command_mode_str = command_mode_param.get_parameter_value().string_value.lower()
+
+        if command_mode_str not in ['pose', 'joint']:
+            self.get_logger().warning(f'Invalid command_mode value. It must be either "pose" or "joint". Using default mode: pose')
+            self.command_mode = EGM_MODE
+        else:
+            self.command_mode = CommandMode(command_mode_str)
+            self.get_logger().info(f'Using command_mode: {self.command_mode.value}')
+
+        if self.command_mode == CommandMode.POSE:
+            self.subscription = self.create_subscription(Pose, 'command/pose', self.pose_listener_callback, 10)
+        elif self.command_mode == CommandMode.JOINT:
+            self.subscription = self.create_subscription(Float32MultiArray, 'command/joint', self.joint_listener_callback, 10)
+        else:
+            self.get_logger().error('Invalid command mode. This should never happen due to parameter validation.')
 
         self.running = True
         self.egm_thread = threading.Thread(target=self.run_egm_loop)
@@ -81,9 +111,20 @@ class EGMDriver(Node):
 
         self.get_logger().info('EGM Driver is ready and running.')
 
-    def listener_callback(self, msg):
+    def pose_listener_callback(self, msg):
         self.target_pos = [msg.position.x * 1000.0, msg.position.y * 1000.0, msg.position.z * 1000.0]
         self.target_orient = [msg.orientation.w, msg.orientation.x, msg.orientation.y, msg.orientation.z]
+
+    def joint_listener_callback(self, msg):
+        if self.current_joint_position is None:
+            self.get_logger().warning('Received joint command before robot state is available. Ignoring command.')
+            return
+
+        if len(msg.data) != len(self.current_joint_position):
+            self.get_logger().warning(f'Received joint command with incorrect number of joints. Expected {len(self.current_joint_position)}, got {len(msg.data)}.')
+            return
+
+        self.target_joint_position = list(map(math.degrees, msg.data))
 
     def timer_callback(self):
         if self.current_joint_position is not None:
@@ -108,6 +149,12 @@ class EGMDriver(Node):
     def filter(self, current, target):
         return current + (target - current) * self.smooth_factor
 
+    def send_command(self, egm):
+        if self.command_mode == CommandMode.JOINT and self.target_joint_position is not None:
+            egm.send_to_robot(self.current_send_joint_position) # type: ignore
+        elif self.command_mode == CommandMode.POSE and self.target_pos is not None and self.target_orient is not None:
+            egm.send_to_robot_cart(self.current_send_pos, self.current_send_orient) # type: ignore
+
     def run_egm_loop(self):
         with EGM(port=self.egm_port) as egm:
             self.get_logger().info('Waiting response from robot...')
@@ -128,16 +175,17 @@ class EGMDriver(Node):
 
                 # PHASE 1: STARTUP (copy whatever the robot is doing to avoid initial jerky motion)
                 if startup_counter < INITIAL_STABILIZATION_CYCLES:
+                    self.current_send_joint_position = self.current_joint_position
                     self.current_send_pos = self.current_pos
                     self.current_send_orient = self.current_orient
 
                     # Ignore ROS commands until we have a stable reading from the robot
-                    if self.target_pos is None:
-                        self.target_pos = self.current_pos
-                        self.target_orient = self.current_orient
+                    self.target_joint_position = self.current_joint_position
+                    self.target_pos = self.current_pos
+                    self.target_orient = self.current_orient
 
                     startup_counter += 1
-                    egm.send_to_robot_cart(self.current_pos, self.current_orient) # type: ignore
+                    self.send_command(egm)
                     continue
 
                 if notify_initial_startup:
@@ -145,6 +193,9 @@ class EGMDriver(Node):
                     notify_initial_startup = False
 
                 # PHASE 2: SMOOTH CONTROL (keep current pose in absence of pending commands)
+                if self.target_joint_position is None:
+                    self.target_joint_position = self.current_send_joint_position
+
                 if self.target_pos is None:
                     self.target_pos = self.current_send_pos
 
@@ -152,10 +203,11 @@ class EGMDriver(Node):
                     self.target_orient = self.current_send_orient
 
                 # Apply low-pass filter (exponential moving average) to position
+                self.current_send_joint_position = [self.filter(self.current_send_joint_position[i], self.target_joint_position[i]) for i in range(len(self.current_send_joint_position))] # type: ignore
                 self.current_send_pos = [self.filter(self.current_send_pos[i], self.target_pos[i]) for i in range(3)] # type: ignore
                 self.current_send_orient = self.target_orient
 
-                egm.send_to_robot_cart(self.current_send_pos, self.current_send_orient) # type: ignore
+                self.send_command(egm)
                 time.sleep(EGM_PERIOD)
 
 def main(args=None):

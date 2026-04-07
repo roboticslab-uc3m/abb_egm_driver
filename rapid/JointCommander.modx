@@ -1,0 +1,24 @@
+MODULE JointCommander
+    VAR egmident egmID1;
+    VAR egmstate egmSt1;
+
+    PROC main()
+        ! Before EGM guidance, the robot has to stop on a fine point
+        MoveAbsJ CJointT(),v100,fine,tool0;
+
+        EGMReset egmID1;
+        EGMGetId egmID1;
+
+        egmSt1:=EGMGetState(egmID1);
+
+        IF egmSt1<=EGM_STATE_CONNECTED THEN
+            EGMSetupUC ROB_1,egmID1,"default","UCdevice"\Joint;
+        ENDIF
+
+        EGMActJoint egmID1\MaxPosDeviation:=360\MaxSpeedDeviation:=1000;
+        EGMRunJoint egmID1,EGM_STOP_HOLD\J1\J2\J3\J4\J5\J6\J7\CondTime:=10\RampInTime:=0.05;
+
+        EGMWaitCond egmID1;
+        EGMStop egmID1,EGM_STOP_HOLD;
+     ENDPROC
+ENDMODULE
