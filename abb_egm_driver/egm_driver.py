@@ -109,6 +109,8 @@ class EGMDriver(Node):
             self.get_logger().error('Invalid command mode. This should never happen due to parameter validation.')
 
         self.running = True
+        self.initialized = False
+
         self.egm_thread = threading.Thread(target=self.run_egm_loop)
         self.egm_thread.start()
 
@@ -156,19 +158,19 @@ class EGMDriver(Node):
         return current + (target - current) * self.smooth_factor
 
     def send_command(self, egm):
-        if self.command_mode == CommandMode.JOINT and self.target_joint_position is not None:
-            egm.send_to_robot(self.current_send_joint_position) # type: ignore
-        elif self.command_mode == CommandMode.POSE and self.target_pos is not None and self.target_orient is not None:
-            egm.send_to_robot_cart(self.current_send_pos, self.current_send_orient) # type: ignore
-        elif self.command_mode == CommandMode.CORR and self.target_pos is not None:
-            egm.send_to_robot_path_corr(self.current_send_pos) # type: ignore
+        if self.initialized:
+            if self.command_mode == CommandMode.JOINT:
+                egm.send_to_robot(self.current_send_joint_position) # type: ignore
+            elif self.command_mode == CommandMode.POSE:
+                egm.send_to_robot_cart(self.current_send_pos, self.current_send_orient) # type: ignore
+            elif self.command_mode == CommandMode.CORR:
+                egm.send_to_robot_path_corr(self.current_send_pos) # type: ignore
 
     def run_egm_loop(self):
         with EGM(port=self.egm_port) as egm:
             self.get_logger().info('Waiting response from robot...')
 
             startup_counter = 0
-            notify_initial_startup = True
             INITIAL_STABILIZATION_CYCLES = 100
 
             while self.running:
@@ -197,9 +199,9 @@ class EGMDriver(Node):
                     self.send_command(egm)
                     continue
 
-                if notify_initial_startup:
+                if not self.initialized:
                     self.get_logger().info('Robot state received. Entering control loop.')
-                    notify_initial_startup = False
+                    self.initialized = True
 
                 # PHASE 2: SMOOTH CONTROL (keep current pose in absence of pending commands)
                 if self.target_joint_position is None:
