@@ -1,6 +1,6 @@
 import rclpy
 from rclpy.node import Node
-from geometry_msgs.msg import Pose
+from geometry_msgs.msg import Point, Pose
 from std_msgs.msg import Float32MultiArray
 from sensor_msgs.msg import JointState
 from rcl_interfaces.msg import ParameterDescriptor
@@ -13,6 +13,7 @@ import time
 class CommandMode(Enum):
     POSE = 'pose'
     JOINT = 'joint'
+    CORR = 'corr'
 
 # default EGM communication port
 EMG_PORT = 6510
@@ -85,14 +86,14 @@ class EGMDriver(Node):
             self.timer = self.create_timer(self.publish_period, self.timer_callback)
 
         command_mode_param = self.declare_parameter('command_mode', 'pose',
-                                                    ParameterDescriptor(description='Control mode for incoming commands (pose or joint)',
-                                                                        additional_constraints='command_mode must be either "pose" or "joint"',
+                                                    ParameterDescriptor(description='Control mode for incoming commands (pose, joint or corr)',
+                                                                        additional_constraints='command_mode must be either "pose", "joint" or "corr"',
                                                                         read_only=True))
 
         command_mode_str = command_mode_param.get_parameter_value().string_value.lower()
 
-        if command_mode_str not in ['pose', 'joint']:
-            self.get_logger().warning(f'Invalid command_mode value. It must be either "pose" or "joint". Using default mode: pose')
+        if command_mode_str not in ['pose', 'joint', 'corr']:
+            self.get_logger().warning(f'Invalid command_mode value. It must be either "pose", "joint" or "corr". Using default mode: pose')
             self.command_mode = EGM_MODE
         else:
             self.command_mode = CommandMode(command_mode_str)
@@ -102,6 +103,8 @@ class EGMDriver(Node):
             self.subscription = self.create_subscription(Pose, 'command/pose', self.pose_listener_callback, 10)
         elif self.command_mode == CommandMode.JOINT:
             self.subscription = self.create_subscription(Float32MultiArray, 'command/joint', self.joint_listener_callback, 10)
+        elif self.command_mode == CommandMode.CORR:
+            self.subscription = self.create_subscription(Point, 'command/path_corr', self.corr_listener_callback, 10)
         else:
             self.get_logger().error('Invalid command mode. This should never happen due to parameter validation.')
 
@@ -125,6 +128,9 @@ class EGMDriver(Node):
             return
 
         self.target_joint_position = list(map(math.degrees, msg.data))
+
+    def corr_listener_callback(self, msg):
+        self.target_pos = [msg.x * 1000.0, msg.y * 1000.0, msg.z * 1000.0]
 
     def timer_callback(self):
         if self.current_joint_position is not None:
@@ -154,6 +160,8 @@ class EGMDriver(Node):
             egm.send_to_robot(self.current_send_joint_position) # type: ignore
         elif self.command_mode == CommandMode.POSE and self.target_pos is not None and self.target_orient is not None:
             egm.send_to_robot_cart(self.current_send_pos, self.current_send_orient) # type: ignore
+        elif self.command_mode == CommandMode.CORR and self.target_pos is not None:
+            egm.send_to_robot_path_corr(self.current_send_pos) # type: ignore
 
     def run_egm_loop(self):
         with EGM(port=self.egm_port) as egm:
@@ -165,6 +173,7 @@ class EGMDriver(Node):
 
             while self.running:
                 success, state = egm.receive_from_robot()
+
                 if not success or state is None or state.cartesian is None:
                     self.get_logger().warning('Failed to receive robot state. Retrying...')
                     continue
