@@ -28,7 +28,7 @@ The following parameters can be set when launching the driver and/or at runtime:
 
 - `egm_port` (int, default: 6510): UDP port number for EGM communication. Make sure it matches the port number configured in RobotStudio. Read only.
 - `smooth_factor` (double, default: 0.02): smoothing factor for the low-pass filter (exponential moving average) applied to the commanded trajectory, between 0 and 1. Lower values result in smoother trajectories, but also higher lag.
-- `publish_rate` (double, default: 0.01): rate at which the robot state is published, in seconds. Zero or negative means the driver will not publish the state. Read only.
+- `publish_period` (double, default: 0.01): period at which the robot state is published, in seconds. Zero or negative means the driver will not publish the state. Read only.
 - `command_mode` (string, default: "pose"): command mode, either "pose" or "joint". Read only.
 
 This package also includes a simple keyboard teleoperation node that can be used to test the driver. It publishes commands in the task space, so make sure to launch the driver in pose mode.
@@ -50,7 +50,7 @@ ros2 run abb_egm_driver egm_driver --ros-args -p command_mode:=pose
 All default parameters, and example keyboard-control app:
 
 ```bash
-ros2 run abb_egm_driver egm_driver --ros-args -p egm_port:=6510 -p smooth_factor:=0.02 -p publish_rate:=0.01 -p command_mode:=pose
+ros2 run abb_egm_driver egm_driver --ros-args -p egm_port:=6510 -p smooth_factor:=0.02 -p publish_period:=0.01 -p command_mode:=pose
 ros2 run abb_egm_driver keyboard_teleop
 ```
 
