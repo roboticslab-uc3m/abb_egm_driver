@@ -180,11 +180,10 @@ class EGMDriver(Node):
                     self.get_logger().warning('Failed to receive robot state. Retrying...')
                     continue
 
-                self.current_joint_position = state.joint_angles
+                self.current_joint_position = state.joint_angles.tolist()
                 self.current_pos = [state.cartesian.pos.x, state.cartesian.pos.y, state.cartesian.pos.z]
                 self.current_orient = [state.cartesian.orient.u0, state.cartesian.orient.u1, state.cartesian.orient.u2, state.cartesian.orient.u3]
 
-                # PHASE 1: STARTUP (copy whatever the robot is doing to avoid initial jerky motion)
                 if startup_counter < INITIAL_STABILIZATION_CYCLES:
                     self.current_send_joint_position = self.current_joint_position
                     self.current_send_pos = self.current_pos
@@ -202,16 +201,6 @@ class EGMDriver(Node):
                 if not self.initialized:
                     self.get_logger().info('Robot state received. Entering control loop.')
                     self.initialized = True
-
-                # PHASE 2: SMOOTH CONTROL (keep current pose in absence of pending commands)
-                if self.target_joint_position is None:
-                    self.target_joint_position = self.current_send_joint_position
-
-                if self.target_pos is None:
-                    self.target_pos = self.current_send_pos
-
-                if self.target_orient is None:
-                    self.target_orient = self.current_send_orient
 
                 # Apply low-pass filter (exponential moving average) to position
                 self.current_send_joint_position = [self.filter(self.current_send_joint_position[i], self.target_joint_position[i]) for i in range(len(self.current_send_joint_position))] # type: ignore
