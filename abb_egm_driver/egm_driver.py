@@ -24,8 +24,8 @@ EGM_PERIOD = 0.004
 # EMA factor (low-pass filter, lower is smoother)
 SMOOTH_FACTOR = 0.02
 
-# ROS state publish period (in seconds)
-PUBLISH_PERIOD = 0.01
+# ROS state publish period (in milliseconds)
+PUBLISH_PERIOD = 10
 
 # default guidance mode for incoming commands (pose or joint)
 EGM_MODE = CommandMode.POSE
@@ -72,18 +72,18 @@ class EGMDriver(Node):
             self.get_logger().info(f'Using smooth_factor: {self.smooth_factor}')
 
         publish_period_param = self.declare_parameter('publish_period', PUBLISH_PERIOD,
-                                                      ParameterDescriptor(description='Period for publishing robot state (in seconds, use <= 0 for no publishing)',
+                                                      ParameterDescriptor(description='Period for publishing robot state (in milliseconds, use <= 0 for no publishing)',
                                                                           read_only=True))
 
-        self.publish_period = publish_period_param.get_parameter_value().double_value
+        self.publish_period = publish_period_param.get_parameter_value().integer_value
 
-        if self.publish_period <= 0.0:
+        if self.publish_period <= 0:
             self.get_logger().info('Publishing of robot state is disabled (publish_period <= 0).')
         else:
-            self.get_logger().info(f'Publishing of robot state is enabled (publish_period: {self.publish_period} seconds).')
+            self.get_logger().info(f'Publishing of robot state is enabled (publish_period: {self.publish_period} milliseconds).')
             self.publisher_joint = self.create_publisher(JointState, 'state/joint', 10)
             self.publisher_pose = self.create_publisher(Pose, 'state/pose', 10)
-            self.timer = self.create_timer(self.publish_period, self.timer_callback)
+            self.timer = self.create_timer(self.publish_period * 0.001, self.timer_callback)
 
         command_mode_param = self.declare_parameter('command_mode', 'pose',
                                                     ParameterDescriptor(description='Control mode for incoming commands (pose, joint or corr)',
