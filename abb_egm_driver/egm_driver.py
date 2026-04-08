@@ -19,7 +19,10 @@ class CommandMode(Enum):
 EMG_PORT = 6510
 
 # default 4 ms period for EGM communication (250 Hz)
-EGM_PERIOD = 0.004
+EGM_PERIOD = 4
+
+# default minimum period for path correction mode
+EGM_PATH_CORR_PERIOD = 24
 
 # EMA factor (low-pass filter, lower is smoother)
 SMOOTH_FACTOR = 0.02
@@ -75,15 +78,15 @@ class EGMDriver(Node):
                                                       ParameterDescriptor(description='Period for publishing robot state (in milliseconds, use <= 0 for no publishing)',
                                                                           read_only=True))
 
-        self.publish_period = publish_period_param.get_parameter_value().integer_value
+        publish_period = publish_period_param.get_parameter_value().integer_value
 
-        if self.publish_period <= 0:
+        if publish_period <= 0:
             self.get_logger().info('Publishing of robot state is disabled (publish_period <= 0).')
         else:
-            self.get_logger().info(f'Publishing of robot state is enabled (publish_period: {self.publish_period} milliseconds).')
+            self.get_logger().info(f'Publishing of robot state is enabled (publish_period: {publish_period} milliseconds).')
             self.publisher_joint = self.create_publisher(JointState, 'state/joint', 10)
             self.publisher_pose = self.create_publisher(Pose, 'state/pose', 10)
-            self.timer = self.create_timer(self.publish_period * 0.001, self.timer_callback)
+            self.timer = self.create_timer(publish_period * 0.001, self.timer_callback)
 
         command_mode_param = self.declare_parameter('command_mode', 'pose',
                                                     ParameterDescriptor(description='Control mode for incoming commands (pose, joint or corr)',
@@ -98,6 +101,23 @@ class EGMDriver(Node):
         else:
             self.command_mode = CommandMode(command_mode_str)
             self.get_logger().info(f'Using command_mode: {self.command_mode.value}')
+
+        command_period_param = self.declare_parameter('command_period', EGM_PATH_CORR_PERIOD if self.command_mode == CommandMode.CORR else EGM_PERIOD,
+                                                       ParameterDescriptor(description='Command period for EGM communication (in milliseconds)',
+                                                                           additional_constraints='Must be a multiple of 4 (pose and joint mode) or 24 (path correction mode)',
+                                                                           read_only=True))
+
+        command_period = command_period_param.get_parameter_value().integer_value
+
+        if command_period <= 0 or command_period % EGM_PERIOD != 0 and self.command_mode in [CommandMode.POSE, CommandMode.JOINT]:
+            self.get_logger().warning(f'Command period of {command_period} ms is not a positive multiple of {EGM_PERIOD}, forcing to {EGM_PERIOD} ms.')
+            command_period = EGM_PERIOD
+        elif command_period <= 0 or command_period % EGM_PATH_CORR_PERIOD != 0 and self.command_mode == CommandMode.CORR:
+            self.get_logger().warning(f'Command period of {command_period} ms is not a positive multiple of {EGM_PATH_CORR_PERIOD}, forcing to {EGM_PATH_CORR_PERIOD} ms.')
+            command_period = EGM_PATH_CORR_PERIOD
+
+        self.divisor = command_period / EGM_PERIOD
+        self.counter = 0
 
         if self.command_mode == CommandMode.POSE:
             self.subscription = self.create_subscription(Pose, 'command/pose', self.pose_listener_callback, 10)
@@ -158,7 +178,7 @@ class EGMDriver(Node):
         return current + (target - current) * self.smooth_factor
 
     def send_command(self, egm):
-        if self.initialized:
+        if self.initialized and self.counter % self.divisor == 0:
             if self.command_mode == CommandMode.JOINT:
                 egm.send_to_robot(self.current_send_joint_position) # type: ignore
             elif self.command_mode == CommandMode.POSE:
@@ -195,7 +215,6 @@ class EGMDriver(Node):
                     self.target_orient = self.current_orient
 
                     startup_counter += 1
-                    self.send_command(egm)
                     continue
 
                 if not self.initialized:
@@ -207,8 +226,9 @@ class EGMDriver(Node):
                 self.current_send_pos = [self.filter(self.current_send_pos[i], self.target_pos[i]) for i in range(3)] # type: ignore
                 self.current_send_orient = self.target_orient
 
+                self.counter += 1
                 self.send_command(egm)
-                time.sleep(EGM_PERIOD)
+                time.sleep(EGM_PERIOD * 0.001) # convert ms to seconds
 
 def main(args=None):
     rclpy.init(args=args)
