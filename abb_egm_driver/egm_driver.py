@@ -62,6 +62,8 @@ class EGMDriver(Node):
         self.target_pos = None
         self.target_orient = None
 
+        self.target_corr = [0.0, 0.0, 0.0]
+
         smooth_factor_param = self.declare_parameter('smooth_factor', SMOOTH_FACTOR,
                                                       ParameterDescriptor(description='Smoothing factor for low-pass filter (lower is smoother)',
                                                                           additional_constraints='0.0 <= smooth_factor <= 1.0'))
@@ -152,7 +154,8 @@ class EGMDriver(Node):
         self.target_joint_position = list(map(math.degrees, msg.data))
 
     def corr_listener_callback(self, msg):
-        self.target_pos = [msg.x * 1000.0, msg.y * 1000.0, msg.z * 1000.0]
+        current_target = [msg.x * 1000.0, msg.y * 1000.0, msg.z * 1000.0]
+        self.target_corr = [self.filter(self.target_corr[i], current_target[i]) for i in range(3)] # type: ignore
 
     def timer_callback(self):
         if self.current_joint_position is not None:
@@ -184,7 +187,7 @@ class EGMDriver(Node):
             elif self.command_mode == CommandMode.POSE:
                 egm.send_to_robot_cart(self.current_send_pos, self.current_send_orient) # type: ignore
             elif self.command_mode == CommandMode.CORR:
-                egm.send_to_robot_path_corr(self.current_send_pos) # type: ignore
+                egm.send_to_robot_path_corr(self.target_corr) # type: ignore
 
     def run_egm_loop(self):
         with EGM(port=self.egm_port) as egm:
