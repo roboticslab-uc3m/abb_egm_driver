@@ -12,13 +12,16 @@ pip install ABBRobotEGM
 
 ## Usage
 
-The ABB robot can be controlled in the joint or task space by publishing messages to either of the following topics, which should be selected during initialization:
+The ABB robot can be controlled in the joint or task space by publishing messages to either of the following topics; their availability depends on the command mode, which should be selected during initialization:
 
-- `command/pose` (geometry_msgs/Pose)
-- `command/joint` (std_msgs/Float32MultiArray)
-- `command/path_corr` (geometry_msgs/Point)
+- `command/pose` (geometry_msgs/Pose, only pose mode)
+- `command/joint` (std_msgs/Float32MultiArray, only joint mode)
+- `command/path_corr` (geometry_msgs/Point, only path correction mode)
+- `command/do` (std_msgs/Bool, only in joint and pose modes)
 
 The [rapid/](rapid) folder contains example RAPID code snippets for both command modes, which can be used as a reference when implementing your own RAPID program. Use [rapid/JointCommander.modx](JointCommander.modx) for joint space control, [rapid/PoseCommander.modx](PoseCommander.modx) for task space control, and [rapid/PathCorrection.modx](PathCorrection.modx) for path correction mode.
+
+A fourth command type is available to set a digital signal on the robot (via `command/do`), which can be used for triggering a tool, for instance. The driver will send a Boolean value together with the joint or pose command, so that they are executed simultaneously on the robot side. In order to use it, a new digital input (DI) signal must be registered in the robot configuration (I/O System > Signal), configured in RAPID code through the `\DIFromSensor:=<name>` argument to `EGMActPose` or `EGMActJoint`, and then linked to the desired DO (I/O System > Cross Connection, then set the Resultant and Actor 1 properties accordingly).
 
 Regardless of the command mode, current robot configuration in the joint and tasks spaces is always published on the following topics simultaneously:
 

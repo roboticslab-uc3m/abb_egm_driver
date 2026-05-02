@@ -1,7 +1,7 @@
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Point, Pose
-from std_msgs.msg import Float32MultiArray
+from std_msgs.msg import Float32MultiArray, Bool
 from sensor_msgs.msg import JointState
 from rcl_interfaces.msg import ParameterDescriptor
 from ABBRobotEGM import EGM
@@ -64,6 +64,8 @@ class EGMDriver(Node):
         self.target_orient = None
         self.target_corr = [0.0, 0.0, 0.0]
 
+        self.send_do = None
+
         smooth_factor_param = self.declare_parameter('smooth_factor', SMOOTH_FACTOR,
                                                       ParameterDescriptor(description='Smoothing factor for low-pass filter (lower is smoother)',
                                                                           additional_constraints='0.0 <= smooth_factor <= 1.0'))
@@ -122,13 +124,16 @@ class EGMDriver(Node):
         self.counter = 0
 
         if self.command_mode == CommandMode.POSE:
-            self.subscription = self.create_subscription(Pose, 'command/pose', self.pose_listener_callback, 10)
+            self.subscription_cmd = self.create_subscription(Pose, 'command/pose', self.pose_listener_callback, 10)
         elif self.command_mode == CommandMode.JOINT:
-            self.subscription = self.create_subscription(Float32MultiArray, 'command/joint', self.joint_listener_callback, 10)
+            self.subscription_cmd = self.create_subscription(Float32MultiArray, 'command/joint', self.joint_listener_callback, 10)
         elif self.command_mode == CommandMode.CORR:
-            self.subscription = self.create_subscription(Point, 'command/path_corr', self.corr_listener_callback, 10)
+            self.subscription_cmd = self.create_subscription(Point, 'command/path_corr', self.corr_listener_callback, 10)
         else:
             self.get_logger().error('Invalid command mode. This should never happen due to parameter validation.')
+
+        if self.command_mode != CommandMode.CORR:
+            self.subscription_do = self.create_subscription(Bool, 'command/do', self.do_listener_callback, 10)
 
         self.running = True
         self.initialized = False
@@ -155,6 +160,9 @@ class EGMDriver(Node):
 
     def corr_listener_callback(self, msg):
         self.target_corr = [msg.x * 1000.0, msg.y * 1000.0, msg.z * 1000.0]
+
+    def do_listener_callback(self, msg):
+        self.send_do = msg.data
 
     def timer_callback(self):
         if self.current_joint is not None:
@@ -184,11 +192,11 @@ class EGMDriver(Node):
             if self.command_mode == CommandMode.JOINT:
                 axes = len(self.current_send_joint) # type: ignore
                 self.current_send_joint = [self.filter(self.current_send_joint[i], self.target_joint[i]) for i in range(axes)] # type: ignore
-                egm.send_to_robot(self.current_send_joint)
+                egm.send_to_robot(self.current_send_joint, digital_signal_to_robot=self.send_do)
             elif self.command_mode == CommandMode.POSE:
                 self.current_send_pos = [self.filter(self.current_send_pos[i], self.target_pos[i]) for i in range(3)] # type: ignore
                 self.current_send_orient = list(self.target_orient) # type: ignore
-                egm.send_to_robot_cart(self.current_send_pos, self.current_send_orient)
+                egm.send_to_robot_cart(self.current_send_pos, self.current_send_orient, digital_signal_to_robot=self.send_do)
             elif self.command_mode == CommandMode.CORR:
                 self.current_send_corr = [self.filter(self.current_send_corr[i], self.target_corr[i]) for i in range(3)] # type: ignore
                 egm.send_to_robot_path_corr(self.current_send_corr)
