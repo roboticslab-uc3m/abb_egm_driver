@@ -50,18 +50,18 @@ class EGMDriver(Node):
         else:
             self.get_logger().info(f'Using EGM port: {self.egm_port}')
 
-        self.current_joint_position = None
+        self.current_joint = None
         self.current_pos = None
         self.current_orient = None
 
-        self.current_send_joint_position = None
+        self.current_send_joint = None
         self.current_send_pos = None
         self.current_send_orient = None
+        self.current_send_corr = [0.0, 0.0, 0.0]
 
-        self.target_joint_position = None
+        self.target_joint = None
         self.target_pos = None
         self.target_orient = None
-
         self.target_corr = [0.0, 0.0, 0.0]
 
         smooth_factor_param = self.declare_parameter('smooth_factor', SMOOTH_FACTOR,
@@ -143,24 +143,23 @@ class EGMDriver(Node):
         self.target_orient = [msg.orientation.w, msg.orientation.x, msg.orientation.y, msg.orientation.z]
 
     def joint_listener_callback(self, msg):
-        if self.current_joint_position is None:
+        if self.current_joint is None:
             self.get_logger().warning('Received joint command before robot state is available. Ignoring command.')
             return
 
-        if len(msg.data) != len(self.current_joint_position):
-            self.get_logger().warning(f'Received joint command with incorrect number of joints. Expected {len(self.current_joint_position)}, got {len(msg.data)}.')
+        if len(msg.data) != len(self.current_joint):
+            self.get_logger().warning(f'Received joint command with incorrect number of joints. Expected {len(self.current_joint)}, got {len(msg.data)}.')
             return
 
-        self.target_joint_position = list(map(math.degrees, msg.data))
+        self.target_joint = list(map(math.degrees, msg.data))
 
     def corr_listener_callback(self, msg):
-        current_target = [msg.x * 1000.0, msg.y * 1000.0, msg.z * 1000.0]
-        self.target_corr = [self.filter(self.target_corr[i], current_target[i]) for i in range(3)] # type: ignore
+        self.target_corr = [msg.x * 1000.0, msg.y * 1000.0, msg.z * 1000.0]
 
     def timer_callback(self):
-        if self.current_joint_position is not None:
+        if self.current_joint is not None:
             joint_msg = JointState()
-            joint_msg.position = list(map(math.radians, self.current_joint_position))
+            joint_msg.position = list(map(math.radians, self.current_joint))
             self.publisher_joint.publish(joint_msg)
 
         if self.current_pos is not None and self.current_orient is not None:
@@ -183,11 +182,16 @@ class EGMDriver(Node):
     def send_command(self, egm):
         if self.initialized and self.counter % self.divisor == 0:
             if self.command_mode == CommandMode.JOINT:
-                egm.send_to_robot(self.current_send_joint_position) # type: ignore
+                axes = len(self.current_send_joint) # type: ignore
+                self.current_send_joint = [self.filter(self.current_send_joint[i], self.target_joint[i]) for i in range(axes)] # type: ignore
+                egm.send_to_robot(self.current_send_joint)
             elif self.command_mode == CommandMode.POSE:
-                egm.send_to_robot_cart(self.current_send_pos, self.current_send_orient) # type: ignore
+                self.current_send_pos = [self.filter(self.current_send_pos[i], self.target_pos[i]) for i in range(3)] # type: ignore
+                self.current_send_orient = list(self.target_orient) # type: ignore
+                egm.send_to_robot_cart(self.current_send_pos, self.current_send_orient)
             elif self.command_mode == CommandMode.CORR:
-                egm.send_to_robot_path_corr(self.target_corr) # type: ignore
+                self.current_send_corr = [self.filter(self.current_send_corr[i], self.target_corr[i]) for i in range(3)] # type: ignore
+                egm.send_to_robot_path_corr(self.current_send_corr)
 
     def run_egm_loop(self):
         with EGM(port=self.egm_port) as egm:
@@ -203,7 +207,7 @@ class EGMDriver(Node):
                     self.get_logger().warning('Failed to receive robot state. Retrying...')
                     continue
 
-                self.current_joint_position = state.joint_angles.tolist()
+                self.current_joint = state.joint_angles.tolist() # clone list to avoid reference issues
                 self.current_pos = [state.cartesian.pos.x, state.cartesian.pos.y, state.cartesian.pos.z]
                 self.current_orient = [state.cartesian.orient.u0, state.cartesian.orient.u1, state.cartesian.orient.u2, state.cartesian.orient.u3]
 
@@ -212,17 +216,16 @@ class EGMDriver(Node):
                         startup_counter += 1
                         continue
 
-                    self.current_send_joint_position = self.target_joint_position = self.current_joint_position
-                    self.current_send_pos = self.target_pos = self.current_pos
-                    self.current_send_orient = self.target_orient = self.current_orient
+                    self.target_joint = list(self.current_joint)
+                    self.target_pos = list(self.current_pos)
+                    self.target_orient = list(self.current_orient)
+
+                    self.current_send_joint = list(self.current_joint)
+                    self.current_send_pos = list(self.current_pos)
+                    self.current_send_orient = list(self.current_orient)
 
                     self.get_logger().info('Robot state received. Entering control loop.')
                     self.initialized = True
-
-                # Apply low-pass filter (exponential moving average) to position
-                self.current_send_joint_position = [self.filter(self.current_send_joint_position[i], self.target_joint_position[i]) for i in range(len(self.current_send_joint_position))] # type: ignore
-                self.current_send_pos = [self.filter(self.current_send_pos[i], self.target_pos[i]) for i in range(3)] # type: ignore
-                self.current_send_orient = self.target_orient
 
                 self.counter += 1
                 self.send_command(egm)
