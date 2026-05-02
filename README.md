@@ -14,19 +14,25 @@ pip install ABBRobotEGM
 
 The ABB robot can be controlled in the joint or task space by publishing messages to either of the following topics; their availability depends on the command mode, which should be selected during initialization:
 
-- `command/pose` (geometry_msgs/Pose, only pose mode)
-- `command/joint` (std_msgs/Float32MultiArray, only joint mode)
-- `command/path_corr` (geometry_msgs/Point, only path correction mode)
+- `command/pose` (geometry_msgs/Pose, only in pose mode)
+- `command/joint` (std_msgs/Float32MultiArray, only in joint mode)
+- `command/path_corr` (geometry_msgs/Point, only in path correction mode)
 - `command/do` (std_msgs/Bool, only in joint and pose modes)
+- `command/data` (std_msgs/Float64MultiArray, only in joint and pose modes)
 
 The [rapid/](rapid) folder contains example RAPID code snippets for both command modes, which can be used as a reference when implementing your own RAPID program. Use [rapid/JointCommander.modx](JointCommander.modx) for joint space control, [rapid/PoseCommander.modx](PoseCommander.modx) for task space control, and [rapid/PathCorrection.modx](PathCorrection.modx) for path correction mode.
 
 A fourth command type is available to set a digital signal on the robot (via `command/do`), which can be used for triggering a tool, for instance. The driver will send a Boolean value together with the joint or pose command, so that they are executed simultaneously on the robot side. In order to use it, a new digital input (DI) signal must be registered in the robot configuration (I/O System > Signal), configured in RAPID code through the `\DIFromSensor:=<name>` argument to `EGMActPose` or `EGMActJoint`, and then linked to the desired DO (I/O System > Cross Connection, then set the Resultant and Actor 1 properties accordingly).
 
+Finally, a fifth command type is available for sending custom data to the robot (via `command/data`). In order to use it, a new RAPID array variable must be declared in the global scope (e.g., `PERS dnum in_data{40};`), and then linked to the EGM input through the `\DataFromSensor:=<name>` argument to `EGMActPose` or `EGMActJoint`. On the robot side, you can read the data from that variable and use it as needed in your RAPID code.
+
 Regardless of the command mode, current robot configuration in the joint and tasks spaces is always published on the following topics simultaneously:
 
 - `/state/pose` (geometry_msgs/Pose)
 - `/state/joint` (sensor_msgs/JointState)
+- `/state/data` (std_msgs/Float64MultiArray): custom array of 40 double values
+
+The latter allows to read any custom data sent from the robot, such as the force/torque measurements from a wrist-mounted sensor, for instance. In order to use it, a new RAPID array variable must be declared in the global scope (e.g., `PERS dnum out_data{40};`), and then linked to the EGM output through the `\DataToSensor:=<name>` argument to `EGMActPose` or `EGMActJoint`. On the driver side, you can read the data from the `/state/data` topic and use it as needed in your ROS 2 application.
 
 The following parameters can be set when launching the driver and/or at runtime:
 

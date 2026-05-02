@@ -5,6 +5,9 @@ MODULE PoseCommander
     CONST pose pose0:=[[0,0,0],[1,0,0,0]];
     CONST egm_minmax egm_minmax_lin_rot:=[-1E-9,+1E-9];
 
+    PERS dnum in_data{40};
+    PERS dnum out_data{40};
+
     PROC main()
         ! Before EGM guidance, the robot has to stop on a fine point
         MoveJ CRobT(),v100,fine,tool0;
@@ -18,7 +21,8 @@ MODULE PoseCommander
             EGMSetupUC ROB_1,egmID1,"default","UCdevice"\Pose;
         ENDIF
 
-        EGMActPose egmID1\StreamStart\Tool:=tool0\WObj:=wobj0\DIFromSensor:=diEGM,
+        EGMActPose egmID1\StreamStart\Tool:=tool0\WObj:=wobj0
+                   \DataToSensor:=out_data\DIFromSensor:=diEGM\DataFromSensor:=in_data,
                    pose0,EGM_FRAME_WOBJ,pose0,EGM_FRAME_WOBJ
                    \X:=egm_minmax_lin_rot\Y:=egm_minmax_lin_rot\Z:=egm_minmax_lin_rot
                    \Rx:=egm_minmax_lin_rot\Ry:=egm_minmax_lin_rot\Rz:=egm_minmax_lin_rot

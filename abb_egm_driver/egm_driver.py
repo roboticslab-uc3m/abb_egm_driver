@@ -1,7 +1,7 @@
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Point, Pose
-from std_msgs.msg import Float32MultiArray, Bool
+from std_msgs.msg import Float32MultiArray, Float64MultiArray, Bool
 from sensor_msgs.msg import JointState
 from rcl_interfaces.msg import ParameterDescriptor
 from ABBRobotEGM import EGM
@@ -32,6 +32,9 @@ PUBLISH_PERIOD = 10
 
 # default guidance mode for incoming commands (pose or joint)
 EGM_MODE = CommandMode.POSE
+
+# fixed array size of 10 for incoming data from RAPID
+DATA_LENGTH = 40
 
 class EGMDriver(Node):
     def __init__(self):
@@ -66,6 +69,9 @@ class EGMDriver(Node):
 
         self.send_do = None
 
+        self.data_in = None
+        self.data_out = None
+
         smooth_factor_param = self.declare_parameter('smooth_factor', SMOOTH_FACTOR,
                                                       ParameterDescriptor(description='Smoothing factor for low-pass filter (lower is smoother)',
                                                                           additional_constraints='0.0 <= smooth_factor <= 1.0'))
@@ -90,6 +96,7 @@ class EGMDriver(Node):
             self.get_logger().info(f'Publishing of robot state is enabled (publish_period: {publish_period} milliseconds).')
             self.publisher_joint = self.create_publisher(JointState, 'state/joint', 10)
             self.publisher_pose = self.create_publisher(Pose, 'state/pose', 10)
+            self.publisher_data = self.create_publisher(Float64MultiArray, 'state/data', 10)
             self.timer = self.create_timer(publish_period * 0.001, self.timer_callback)
 
         command_mode_param = self.declare_parameter('command_mode', 'pose',
@@ -134,6 +141,7 @@ class EGMDriver(Node):
 
         if self.command_mode != CommandMode.CORR:
             self.subscription_do = self.create_subscription(Bool, 'command/do', self.do_listener_callback, 10)
+            self.subscription_data = self.create_subscription(Float64MultiArray, 'command/data', self.data_listener_callback, 10)
 
         self.running = True
         self.initialized = False
@@ -164,6 +172,9 @@ class EGMDriver(Node):
     def do_listener_callback(self, msg):
         self.send_do = msg.data
 
+    def data_listener_callback(self, msg):
+        self.data_out = msg.data[:DATA_LENGTH]
+
     def timer_callback(self):
         if self.current_joint is not None:
             joint_msg = JointState()
@@ -184,6 +195,11 @@ class EGMDriver(Node):
 
             self.publisher_pose.publish(pose_msg)
 
+        if self.data_in is not None and len(self.data_in) == DATA_LENGTH:
+            data_msg = Float64MultiArray()
+            data_msg.data = self.data_in
+            self.publisher_data.publish(data_msg)
+
     def filter(self, current, target):
         return current + (target - current) * self.smooth_factor
 
@@ -192,11 +208,11 @@ class EGMDriver(Node):
             if self.command_mode == CommandMode.JOINT:
                 axes = len(self.current_send_joint) # type: ignore
                 self.current_send_joint = [self.filter(self.current_send_joint[i], self.target_joint[i]) for i in range(axes)] # type: ignore
-                egm.send_to_robot(self.current_send_joint, digital_signal_to_robot=self.send_do)
+                egm.send_to_robot(self.current_send_joint, rapid_to_robot=self.data_out, digital_signal_to_robot=self.send_do)
             elif self.command_mode == CommandMode.POSE:
                 self.current_send_pos = [self.filter(self.current_send_pos[i], self.target_pos[i]) for i in range(3)] # type: ignore
                 self.current_send_orient = list(self.target_orient) # type: ignore
-                egm.send_to_robot_cart(self.current_send_pos, self.current_send_orient, digital_signal_to_robot=self.send_do)
+                egm.send_to_robot_cart(self.current_send_pos, self.current_send_orient, rapid_to_robot=self.data_out, digital_signal_to_robot=self.send_do)
             elif self.command_mode == CommandMode.CORR:
                 self.current_send_corr = [self.filter(self.current_send_corr[i], self.target_corr[i]) for i in range(3)] # type: ignore
                 egm.send_to_robot_path_corr(self.current_send_corr)
@@ -215,6 +231,7 @@ class EGMDriver(Node):
                 self.current_joint = state.joint_angles.tolist() # clone list to avoid reference issues
                 self.current_pos = [state.cartesian.pos.x, state.cartesian.pos.y, state.cartesian.pos.z]
                 self.current_orient = [state.cartesian.orient.u0, state.cartesian.orient.u1, state.cartesian.orient.u2, state.cartesian.orient.u3]
+                self.data_in = state.rapid_from_robot.tolist()
 
                 if not self.initialized:
                     self.target_joint = list(self.current_joint)
