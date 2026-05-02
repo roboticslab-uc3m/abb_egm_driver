@@ -197,9 +197,6 @@ class EGMDriver(Node):
         with EGM(port=self.egm_port) as egm:
             self.get_logger().info('Waiting response from robot...')
 
-            startup_counter = 0
-            INITIAL_STABILIZATION_CYCLES = 100
-
             while self.running:
                 success, state = egm.receive_from_robot()
 
@@ -212,10 +209,6 @@ class EGMDriver(Node):
                 self.current_orient = [state.cartesian.orient.u0, state.cartesian.orient.u1, state.cartesian.orient.u2, state.cartesian.orient.u3]
 
                 if not self.initialized:
-                    if startup_counter < INITIAL_STABILIZATION_CYCLES:
-                        startup_counter += 1
-                        continue
-
                     self.target_joint = list(self.current_joint)
                     self.target_pos = list(self.current_pos)
                     self.target_orient = list(self.current_orient)
