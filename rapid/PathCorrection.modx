@@ -1,0 +1,32 @@
+MODULE PathCorrection
+    VAR egmident egmID1;
+    VAR egmstate egmSt1;
+    VAR robtarget p_initial;
+
+    CONST num offset:=100;
+
+    PROC main()
+        p_initial:=CRobT();
+
+        EGMReset egmID1;
+        EGMGetId egmID1;
+
+        egmSt1:=EGMGetState(egmID1);
+
+        IF egmSt1<=EGM_STATE_CONNECTED THEN
+            EGMSetupUC ROB_1,egmID1,"EGMPathCorr","UCdevice"\PathCorr\APTR\CommTimeout:=10;
+        ENDIF
+
+        EGMActMove egmID1,tool0.tframe\SampleRate:=24;
+        EGMMoveL egmID1,Offs(p_initial,-offset,-offset,0),v100,z10,tool0\NoCorr;
+
+        WHILE TRUE DO
+            EGMMoveL egmID1,Offs(p_initial,-offset,-offset,0),v100,z10,tool0;
+            EGMMoveL egmID1,Offs(p_initial,offset,-offset,0),v100,z10,tool0;
+            EGMMoveL egmID1,Offs(p_initial,offset,offset,0),v100,z10,tool0;
+            EGMMoveL egmID1,Offs(p_initial,-offset,offset,0),v100,z10,tool0;
+        ENDWHILE
+
+        EGMStop egmID1,EGM_STOP_HOLD;
+    ENDPROC
+ENDMODULE

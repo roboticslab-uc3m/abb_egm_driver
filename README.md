@@ -16,8 +16,9 @@ The ABB robot can be controlled in the joint or task space by publishing message
 
 - `command/pose` (geometry_msgs/Pose)
 - `command/joint` (std_msgs/Float32MultiArray)
+- `command/path_corr` (geometry_msgs/Point)
 
-The [rapid/](rapid) folder contains example RAPID code snippets for both command modes, which can be used as a reference when implementing your own RAPID program. Use [rapid/JointCommander.modx](JointCommander.modx) for joint space control and [rapid/PoseCommander.modx](PoseCommander.modx) for task space control.
+The [rapid/](rapid) folder contains example RAPID code snippets for both command modes, which can be used as a reference when implementing your own RAPID program. Use [rapid/JointCommander.modx](JointCommander.modx) for joint space control, [rapid/PoseCommander.modx](PoseCommander.modx) for task space control, and [rapid/PathCorrection.modx](PathCorrection.modx) for path correction mode.
 
 Regardless of the command mode, current robot configuration in the joint and tasks spaces is always published on the following topics simultaneously:
 
@@ -28,8 +29,9 @@ The following parameters can be set when launching the driver and/or at runtime:
 
 - `egm_port` (int, default: 6510): UDP port number for EGM communication. Make sure it matches the port number configured in RobotStudio. Read only.
 - `smooth_factor` (double, default: 0.02): smoothing factor for the low-pass filter (exponential moving average) applied to the commanded trajectory, between 0 and 1. Lower values result in smoother trajectories, but also higher lag.
-- `publish_period` (double, default: 0.01): period at which the robot state is published, in seconds. Zero or negative means the driver will not publish the state. Read only.
-- `command_mode` (string, default: "pose"): command mode, either "pose" or "joint". Read only.
+- `publish_period` (integer, default: 10): period at which the robot state is published, in milliseconds. Zero or negative means the driver will not publish the state. Read only.
+- `command_mode` (string, default: "pose"): command mode, either "pose", "joint" or "corr". Read only.
+- `command_period` (integer, default: 24 in path correction mode, 4 otherwise): period at which the driver sends commands to the robot, in milliseconds. Read only.
 
 This package also includes a simple keyboard teleoperation node that can be used to test the driver. It publishes commands in the task space, so make sure to launch the driver in pose mode.
 
@@ -47,10 +49,16 @@ Pose mode:
 ros2 run abb_egm_driver egm_driver --ros-args -p command_mode:=pose
 ```
 
+Path correction mode:
+
+```bash
+ros2 run abb_egm_driver egm_driver --ros-args -p command_mode:=corr
+```
+
 All default parameters, and example keyboard-control app:
 
 ```bash
-ros2 run abb_egm_driver egm_driver --ros-args -p egm_port:=6510 -p smooth_factor:=0.02 -p publish_period:=0.01 -p command_mode:=pose
+ros2 run abb_egm_driver egm_driver --ros-args -p egm_port:=6510 -p smooth_factor:=0.02 -p publish_period:=10 -p command_mode:=pose -p command_period:=4
 ros2 run abb_egm_driver keyboard_teleop
 ```
 
