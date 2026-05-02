@@ -21,7 +21,7 @@ EMG_PORT = 6510
 # default 4 ms period for EGM communication (250 Hz)
 EGM_PERIOD = 4
 
-# default minimum period for path correction mode
+# default minimum period for path correction mode (ms)
 EGM_PATH_CORR_PERIOD = 24
 
 # EMA factor (low-pass filter, lower is smoother)
@@ -207,20 +207,15 @@ class EGMDriver(Node):
                 self.current_pos = [state.cartesian.pos.x, state.cartesian.pos.y, state.cartesian.pos.z]
                 self.current_orient = [state.cartesian.orient.u0, state.cartesian.orient.u1, state.cartesian.orient.u2, state.cartesian.orient.u3]
 
-                if startup_counter < INITIAL_STABILIZATION_CYCLES:
-                    self.current_send_joint_position = self.current_joint_position
-                    self.current_send_pos = self.current_pos
-                    self.current_send_orient = self.current_orient
-
-                    # Ignore ROS commands until we have a stable reading from the robot
-                    self.target_joint_position = self.current_joint_position
-                    self.target_pos = self.current_pos
-                    self.target_orient = self.current_orient
-
-                    startup_counter += 1
-                    continue
-
                 if not self.initialized:
+                    if startup_counter < INITIAL_STABILIZATION_CYCLES:
+                        startup_counter += 1
+                        continue
+
+                    self.current_send_joint_position = self.target_joint_position = self.current_joint_position
+                    self.current_send_pos = self.target_pos = self.current_pos
+                    self.current_send_orient = self.target_orient = self.current_orient
+
                     self.get_logger().info('Robot state received. Entering control loop.')
                     self.initialized = True
 
