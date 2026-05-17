@@ -8,7 +8,6 @@ from ABBRobotEGM import EGM
 from enum import Enum
 import math
 import threading
-import time
 
 class CommandMode(Enum):
     POSE = 'pose'
@@ -247,7 +246,6 @@ class EGMDriver(Node):
 
                 self.counter += 1
                 self.send_command(egm)
-                time.sleep(EGM_PERIOD * 0.001) # convert ms to seconds
 
 def main(args=None):
     rclpy.init(args=args)
