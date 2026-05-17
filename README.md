@@ -42,7 +42,11 @@ The following parameters can be set when launching the driver and/or at runtime:
 - `command_mode` (string, default: "pose"): command mode, either "pose", "joint" or "corr". Read only.
 - `command_period` (integer, default: 24 in path correction mode, 4 otherwise): period at which the driver sends commands to the robot, in milliseconds. Read only.
 
-This package also includes a simple keyboard teleoperation node that can be used to test the driver. It publishes commands in the task space, so make sure to launch the driver in pose mode.
+This package also includes a simple keyboard teleoperation node that can be used to test the driver. It publishes commands in the task space, so make sure to launch the driver in pose mode. Also do note that PyKDL is required to run the teleoperation node, so make sure to install it beforehand:
+
+```bash
+pip install PyKDL
+```
 
 ### Examples
 
