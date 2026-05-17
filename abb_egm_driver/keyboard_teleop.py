@@ -4,30 +4,43 @@ import tty
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Pose
+from PyKDL import Rotation
 
 help = """
 ---------------------------
 MANUAL CONTROL OF ABB ROBOT
 ---------------------------
-Motion:
-   w
- a s d    (X / Y)
+Translation:
+   w/s : +X/-X
+   a/d : +Y/-Y
+   q/e : +Z/-Z
 
-Up/Down:
-   q
-   e      (Z)
+Rotation:
+   t/g : +RX/-RX
+   f/h : +RY/-RY
+   r/y : +RZ/-RZ
 
-SPACE: Emergency Stop (Return to Home)
-CTRL-C: Exit
+i: print this help message
+SPACE: return to home
+CTRL-C: exit
 """
 
-MOVE_BINDINGS = {
+TRANSLATE_BINDINGS = {
     'w': ( 0.05,  0.0,  0.0),  # Forward (+X)
     's': (-0.05,  0.0,  0.0),  # Backward (-X)
     'a': ( 0.0,   0.05, 0.0),  # Left (+Y)
     'd': ( 0.0,  -0.05, 0.0),  # Right (-Y)
     'q': ( 0.0,   0.0,  0.05), # Up (+Z)
     'e': ( 0.0,   0.0, -0.05), # Down (-Z)
+}
+
+ROTATE_BINDINGS = {
+    't': ( 0.05,  0.0,  0.0),  # Rotate +RX
+    'g': (-0.05,  0.0,  0.0),  # Rotate -RX
+    'f': ( 0.0,   0.05, 0.0),  # Rotate +RY
+    'h': ( 0.0,  -0.05, 0.0),  # Rotate -RY
+    'r': ( 0.0,   0.0,  0.05), # Rotate +RZ
+    'y': ( 0.0,   0.0, -0.05), # Rotate -RZ
 }
 
 HOME_X = 0.45
@@ -75,7 +88,7 @@ class KeyboardCommander(Node):
         pose.orientation.z = self.rz
 
         self.publisher.publish(pose)
-        print(f'Target: X={self.x:.2f} Y={self.y:.2f} Z={self.z:.2f}\r')
+        print(f'Target: X={self.x:.2f} Y={self.y:.2f} Z={self.z:.2f} || QW={self.rw:.2f} QX={self.rx:.2f} QY={self.ry:.2f} QZ={self.rz:.2f}\r')
 
 def main():
     settings = termios.tcgetattr(sys.stdin)
@@ -88,11 +101,20 @@ def main():
         while True:
             key = getKey(settings)
 
-            if key in MOVE_BINDINGS.keys():
-                dx, dy, dz = MOVE_BINDINGS[key]
+            if key in TRANSLATE_BINDINGS.keys():
+                dx, dy, dz = TRANSLATE_BINDINGS[key]
                 node.x += dx
                 node.y += dy
                 node.z += dz
+                node.publish_pos()
+
+            elif key in ROTATE_BINDINGS.keys():
+                drx, dry, drz = ROTATE_BINDINGS[key]
+                rot = Rotation.Quaternion(node.rx, node.ry, node.rz, node.rw)
+                rot.DoRotX(drx)
+                rot.DoRotY(dry)
+                rot.DoRotZ(drz)
+                node.rx, node.ry, node.rz, node.rw = rot.GetQuaternion()
                 node.publish_pos()
 
             elif key == ' ':
@@ -107,6 +129,9 @@ def main():
 
                 print("\nRESET TO HOME!\n")
                 node.publish_pos()
+
+            elif key == 'i':
+                print(help)
 
             elif key == '\x03': # CTRL-C
                 break

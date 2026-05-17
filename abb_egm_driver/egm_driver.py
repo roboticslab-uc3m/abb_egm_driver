@@ -210,7 +210,7 @@ class EGMDriver(Node):
                 egm.send_to_robot(self.current_send_joint, rapid_to_robot=self.data_out, digital_signal_to_robot=self.send_do)
             elif self.command_mode == CommandMode.POSE:
                 self.current_send_pos = [self.filter(self.current_send_pos[i], self.target_pos[i]) for i in range(3)] # type: ignore
-                self.current_send_orient = list(self.target_orient) # type: ignore
+                self.current_send_orient = [self.filter(self.current_send_orient[i], self.target_orient[i]) for i in range(4)] # type: ignore
                 egm.send_to_robot_cart(self.current_send_pos, self.current_send_orient, rapid_to_robot=self.data_out, digital_signal_to_robot=self.send_do)
             elif self.command_mode == CommandMode.CORR:
                 self.current_send_corr = [self.filter(self.current_send_corr[i], self.target_corr[i]) for i in range(3)] # type: ignore
