@@ -20,8 +20,9 @@ Rotation:
    f/h : +RY/-RY
    r/y : +RZ/-RZ
 
-SPACE: Emergency Stop (Return to Home)
-CTRL-C: Exit
+i: print this help message
+SPACE: return to home
+CTRL-C: exit
 """
 
 TRANSLATE_BINDINGS = {
@@ -128,6 +129,9 @@ def main():
 
                 print("\nRESET TO HOME!\n")
                 node.publish_pos()
+
+            elif key == 'i':
+                print(help)
 
             elif key == '\x03': # CTRL-C
                 break
