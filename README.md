@@ -20,7 +20,7 @@ The ABB robot can be controlled in the joint or task space by publishing message
 - `command/do` (std_msgs/Bool, only in joint and pose modes)
 - `command/data` (std_msgs/Float64MultiArray, only in joint and pose modes)
 
-The [rapid/](rapid) folder contains example RAPID code snippets for both command modes, which can be used as a reference when implementing your own RAPID program. Use [rapid/JointCommander.modx](JointCommander.modx) for joint space control, [rapid/PoseCommander.modx](PoseCommander.modx) for task space control, and [rapid/PathCorrection.modx](PathCorrection.modx) for path correction mode.
+The [rapid/](rapid) folder contains example RAPID code snippets for both command modes, which can be used as a template when implementing your own RAPID program. Use [rapid/JointCommander.modx](JointCommander.modx) for joint space control, [rapid/PoseCommander.modx](PoseCommander.modx) for task space control, and [rapid/PathCorrection.modx](PathCorrection.modx) for path correction mode.
 
 A fourth command type is available to set a digital signal on the robot (via `command/do`), which can be used for triggering a tool, for instance. The driver will send a Boolean value together with the joint or pose command, so that they are executed simultaneously on the robot side. In order to use it, a new digital input (DI) signal must be registered in the robot configuration (I/O System > Signal), configured in RAPID code through the `\DIFromSensor:=<name>` argument to `EGMActPose` or `EGMActJoint`, and then linked to the desired DO (I/O System > Cross Connection, then set the Resultant and Actor 1 properties accordingly).
 
@@ -91,7 +91,7 @@ In Windows 11 and WSL 2, it is recommended to enable [mirrored mode networking](
 
 ### Communicate with RobotStudio
 
-In order to communicate WSL with RobotStudio, you might want to enable mirrored mode networking as well and just use the default `127.0.0.1` (localhost) address, but if you prefer to keep the default WSL 2 networking, you can still make it work by setting up port forwarding. To do so, follow these instructions ([SO answer](https://stackoverflow.com/a/68872599)):
+In order to communicate WSL with RobotStudio, you might want to enable mirrored mode networking as well (see previous section) and just use the default `127.0.0.1` (localhost) address, but if you prefer to keep the default WSL 2 networking, you can still make it work by setting up port forwarding. To do so, follow these instructions ([SO answer](https://stackoverflow.com/a/68872599)):
 
 1. Launch PowerShell and note down the IP address returned by `$(wsl hostname -I)`. Note there might be multiple addresses, so make sure to pick the one that corresponds to your WSL instance (usually it starts with `172.`).
 1. In your RobotStudio project, provided that EGM support has been already enabled, look for *Communication > UDP Unicast Device* in the controller configuration, and fill in the *Remote Address* field of the *UCdevice* entry with the previous IP address. For instance:
