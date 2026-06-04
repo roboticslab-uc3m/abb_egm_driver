@@ -1,5 +1,5 @@
 import rclpy
-from rclpy.node import FloatingPointRange, Node
+from rclpy.node import FloatingPointRange, IntegerRange, Node
 from geometry_msgs.msg import Point, Pose
 from std_msgs.msg import Float32MultiArray, Float64MultiArray, Bool
 from sensor_msgs.msg import JointState
@@ -8,6 +8,8 @@ from ABBRobotEGM import EGM
 from enum import Enum
 import math
 import threading
+import PyKDL as kdl
+import abb_egm_driver.motion3 as m3
 
 class CommandMode(Enum):
     POSE = 'pose'
@@ -34,6 +36,12 @@ EGM_MODE = CommandMode.POSE
 
 # fixed array size of 10 for incoming data from RAPID
 DATA_LENGTH = 40
+
+# default maximum velocity for trajectory execution (mm/s)
+MAX_VELOCITY = 250 # mm/s
+
+# default maximum acceleration for trajectory execution (mm/s^2)
+MAX_ACCELERATION = 200 # mm/s^2
 
 class EGMDriver(Node):
     def __init__(self):
@@ -70,6 +78,10 @@ class EGMDriver(Node):
 
         self.data_in = None
         self.data_out = None
+
+        self.trajectory = None
+        self.is_processing_trajectory = False
+        self.trajectory_start_time = None
 
         smooth_factor_param = self.declare_parameter('smooth_factor', SMOOTH_FACTOR,
                                                      ParameterDescriptor(description='Smoothing factor for low-pass filter (lower is smoother)',
@@ -127,6 +139,23 @@ class EGMDriver(Node):
 
         if self.command_mode == CommandMode.POSE:
             self.subscription_cmd = self.create_subscription(Pose, 'command/pose', self.pose_listener_callback, 10)
+            self.subscription_traj_cmd = self.create_subscription(Pose, 'trajectory/pose', self.trajectory_pose_listener_callback, 10)
+
+            max_velocity_param = self.declare_parameter('max_velocity', MAX_VELOCITY,
+                                                        ParameterDescriptor(description='Maximum velocity for trajectory execution (mm/s)',
+                                                                            integer_range=[IntegerRange(from_value=1, to_value=math.inf)]))
+
+            self.max_velocity = max_velocity_param.get_parameter_value().integer_value
+
+            self.get_logger().info(f'Using max_velocity (trajectories): {self.max_velocity} mm/s')
+
+            max_acceleration_param = self.declare_parameter('max_acceleration', MAX_ACCELERATION,
+                                                            ParameterDescriptor(description='Maximum acceleration for trajectory execution (mm/s^2), "0" means rectangular profile, otherwise trapezoidal',
+                                                                                integer_range=[IntegerRange(from_value=0, to_value=math.inf)]))
+
+            self.max_acceleration = max_acceleration_param.get_parameter_value().integer_value
+
+            self.get_logger().info(f'Using max_acceleration (trajectories): {self.max_acceleration} mm/s^2')
         elif self.command_mode == CommandMode.JOINT:
             self.subscription_cmd = self.create_subscription(Float32MultiArray, 'command/joint', self.joint_listener_callback, 10)
         elif self.command_mode == CommandMode.CORR:
@@ -151,6 +180,38 @@ class EGMDriver(Node):
     def pose_listener_callback(self, msg):
         self.target_pos = [msg.position.x * 1000.0, msg.position.y * 1000.0, msg.position.z * 1000.0]
         self.target_orient = [msg.orientation.w, msg.orientation.x, msg.orientation.y, msg.orientation.z]
+        self.is_processing_trajectory = False
+
+    def trajectory_pose_listener_callback(self, msg):
+        if self.current_pos is None or self.current_orient is None:
+            self.get_logger().warning('Received trajectory command before robot state is available. Ignoring command.')
+            return
+
+        start_pos = kdl.Vector(self.current_pos[0], self.current_pos[1], self.current_pos[2])
+        start_orient = kdl.Rotation.Quaternion(self.current_orient[1], self.current_orient[2], self.current_orient[3], self.current_orient[0])
+
+        end_pos = kdl.Vector(msg.position.x * 1000.0, msg.position.y * 1000.0, msg.position.z * 1000.0)
+        end_orient = kdl.Rotation.Quaternion(msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w)
+
+        H_base_start = kdl.Frame(start_orient, start_pos)
+        H_base_end = kdl.Frame(end_orient, end_pos)
+
+        path = m3.PathLine(H_base_start, H_base_end)
+
+        if self.max_acceleration > 0:
+            profile = m3.VelocityProfileTrapezoidal(self.max_velocity, self.max_acceleration)
+            type_str = 'trapezoidal'
+        else:
+            profile = m3.VelocityProfileRectangular(self.max_velocity)
+            type_str = 'rectangular'
+
+        profile.set_profile(0, path.path_length())
+        self.trajectory = m3.TrajectorySegment(path, profile, profile.duration())
+
+        self.trajectory_start_time = self.get_clock().now()
+        self.is_processing_trajectory = True
+
+        self.get_logger().info(f'Starting {type_str} trajectory execution. Duration: {self.trajectory.duration():.2f} seconds, length: {path.path_length():.2f} mm.')
 
     def joint_listener_callback(self, msg):
         if self.current_joint is None:
@@ -207,8 +268,16 @@ class EGMDriver(Node):
                 self.current_send_joint = [self.filter(self.current_send_joint[i], self.target_joint[i]) for i in range(axes)] # type: ignore
                 egm.send_to_robot(self.current_send_joint, rapid_to_robot=self.data_out, digital_signal_to_robot=self.send_do)
             elif self.command_mode == CommandMode.POSE:
-                self.current_send_pos = [self.filter(self.current_send_pos[i], self.target_pos[i]) for i in range(3)] # type: ignore
-                self.current_send_orient = [self.filter(self.current_send_orient[i], self.target_orient[i]) for i in range(4)] # type: ignore
+                if self.is_processing_trajectory and self.trajectory is not None and self.trajectory_start_time is not None:
+                    elapsed_time = (self.get_clock().now() - self.trajectory_start_time).nanoseconds * 1e-9
+                    H_base_tcp = self.trajectory.position(elapsed_time)
+                    q = H_base_tcp.M.GetQuaternion()
+                    self.current_send_pos = [H_base_tcp.p.x(), H_base_tcp.p.y(), H_base_tcp.p.z()]
+                    self.current_send_orient = [q[3], q[0], q[1], q[2]]
+                else:
+                    self.current_send_pos = [self.filter(self.current_send_pos[i], self.target_pos[i]) for i in range(3)] # type: ignore
+                    self.current_send_orient = [self.filter(self.current_send_orient[i], self.target_orient[i]) for i in range(4)] # type: ignore
+
                 egm.send_to_robot_cart(self.current_send_pos, self.current_send_orient, rapid_to_robot=self.data_out, digital_signal_to_robot=self.send_do)
             elif self.command_mode == CommandMode.CORR:
                 self.current_send_corr = [self.filter(self.current_send_corr[i], self.target_corr[i]) for i in range(3)] # type: ignore
@@ -219,6 +288,12 @@ class EGMDriver(Node):
             if param.name == 'smooth_factor':
                 self.smooth_factor = param.value
                 self.get_logger().info(f'Updated smooth_factor: {self.smooth_factor}')
+            elif param.name == 'max_velocity':
+                self.max_velocity = param.value
+                self.get_logger().info(f'Updated max_velocity: {self.max_velocity} mm/s')
+            elif param.name == 'max_acceleration':
+                self.max_acceleration = param.value
+                self.get_logger().info(f'Updated max_acceleration: {self.max_acceleration} mm/s^2')
 
         return SetParametersResult(successful=True)
 
