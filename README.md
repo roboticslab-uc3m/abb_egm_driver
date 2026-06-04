@@ -4,27 +4,35 @@ ROS 2 drivers for ABB robots featuring Externally Guided Motion (EGM) in RobotWa
 
 ## Installation
 
-Set your ROS 2 environment as usual. Install the following mandatory dependency, then proceed with `colcon build`:
+Set your ROS 2 environment as usual. Install the following mandatory dependencies, then proceed with `colcon build`:
 
 ```bashbash
-pip install ABBRobotEGM
+pip install ABBRobotEGM PyKDL
 ```
 
 ## Usage
 
-The ABB robot can be controlled in the joint or task space by publishing messages to either of the following topics; their availability depends on the command mode, which should be selected during initialization:
+### Streaming commands
 
-- `command/pose` (geometry_msgs/Pose, only in pose mode)
-- `command/joint` (std_msgs/Float32MultiArray, only in joint mode)
-- `command/path_corr` (geometry_msgs/Point, only in path correction mode)
-- `command/do` (std_msgs/Bool, only in joint and pose modes)
-- `command/data` (std_msgs/Float64MultiArray, only in joint and pose modes)
+The ABB robot can be controlled in the joint or task space by publishing high-frequency (up to 250 Hz. i.e., every 4 ms) messages to either of the following topics; their availability depends on the command mode, which should be selected during initialization:
+
+- `command/pose` (geometry_msgs/Pose, only in **pose** mode)
+- `command/joint` (std_msgs/Float32MultiArray, only in **joint** mode)
+- `command/path_corr` (geometry_msgs/Point, only in **path correction** mode)
+- `command/do` (std_msgs/Bool, only in **joint** and **pose** modes)
+- `command/data` (std_msgs/Float64MultiArray, only in **joint** and **pose** modes)
 
 The [rapid/](rapid) folder contains example RAPID code snippets for both command modes, which can be used as a template when implementing your own RAPID program. Use [rapid/JointCommander.modx](JointCommander.modx) for joint space control, [rapid/PoseCommander.modx](PoseCommander.modx) for task space control, and [rapid/PathCorrection.modx](PathCorrection.modx) for path correction mode.
 
-A fourth command type is available to set a digital signal on the robot (via `command/do`), which can be used for triggering a tool, for instance. The driver will send a Boolean value together with the joint or pose command, so that they are executed simultaneously on the robot side. In order to use it, a new digital input (DI) signal must be registered in the robot configuration (I/O System > Signal), configured in RAPID code through the `\DIFromSensor:=<name>` argument to `EGMActPose` or `EGMActJoint`, and then linked to the desired DO (I/O System > Cross Connection, then set the Resultant and Actor 1 properties accordingly).
+A fourth command type is available to set a digital signal on the robot (via `command/do`), which can be used for triggering a tool, for instance. The driver will send a Boolean value together with the joint or pose command, so that they are executed simultaneously on the robot side. In order to use it, a new digital input (DI) signal must be registered in the robot configuration (I/O System > Signal), enabled in RAPID code through the `\DIFromSensor:=<name>` argument to `EGMActPose` or `EGMActJoint`, and then linked to the desired DO (I/O System > Cross Connection, then set the Resultant and Actor 1 properties accordingly).
 
 Finally, a fifth command type is available for sending custom data to the robot (via `command/data`). In order to use it, a new RAPID array variable must be declared in the global scope (e.g., `PERS dnum in_data{40};`), and then linked to the EGM input through the `\DataFromSensor:=<name>` argument to `EGMActPose` or `EGMActJoint`. On the robot side, you can read the data from that variable and use it as needed in your RAPID code.
+
+### Trajectory execution
+
+There is an additional topic, `trajectory/pose` (geometry_msgs/Pose), which allows to send a target pose to the robot at a lower frequency (e.g., 125 ms) when the driver is launched in **pose** mode. In this mode, the robot will continuously execute a predefined trajectory, i.e., a linear motion between the current and the desired poses. The `max_velocity` and `max_acceleration` parameters can be set to configure the velocity profile of the trajectory (see below for details). Depending on `max_acceleration` being used or not, the trajectory will adhere to either a trapezoidal or rectangular velocity profile, respectively.
+
+### State feedback
 
 Regardless of the command mode, current robot configuration in the joint and tasks spaces is always published on the following topics simultaneously:
 
@@ -34,19 +42,19 @@ Regardless of the command mode, current robot configuration in the joint and tas
 
 The latter allows to read any custom data sent from the robot, such as the force/torque measurements from a wrist-mounted sensor, for instance. In order to use it, a new RAPID array variable must be declared in the global scope (e.g., `PERS dnum out_data{40};`), and then linked to the EGM output through the `\DataToSensor:=<name>` argument to `EGMActPose` or `EGMActJoint`. On the driver side, you can read the data from the `/state/data` topic and use it as needed in your ROS 2 application.
 
+### Configuration parameters
+
 The following parameters can be set when launching the driver and/or at runtime:
 
-- `egm_port` (int, default: 6510): UDP port number for EGM communication. Make sure it matches the port number configured in RobotStudio. Read only.
+- `egm_port` (int, default: 6510): UDP port number for EGM communication. Make sure it matches the port number configured in RobotStudio. **Read only.**
 - `smooth_factor` (double, default: 0.02): smoothing factor for the low-pass filter (exponential moving average) applied to the commanded trajectory, between 0 and 1. Lower values result in smoother trajectories, but also higher lag.
-- `publish_period` (integer, default: 10): period at which the robot state is published, in milliseconds. Zero or negative means the driver will not publish the state. Read only.
-- `command_mode` (string, default: "pose"): command mode, either "pose", "joint" or "corr". Read only.
-- `command_period` (integer, default: 24 in path correction mode, 4 otherwise): period at which the driver sends commands to the robot, in milliseconds. Read only.
+- `publish_period` (integer, default: 10): period at which the robot state is published, in milliseconds. Zero or negative means the driver will not publish the state. **Read only.**
+- `command_mode` (string, default: "pose"): command mode, either "pose", "joint" or "corr". **Read only.**
+- `command_period` (integer, default: 24 in path correction mode, 4 otherwise): period at which the driver sends commands to the robot, in milliseconds. **Read only.**
+- `max_velocity` (double, default: 250 mm/s): maximum velocity for trajectory execution. **Pose mode only.**
+- `max_acceleration` (double, default: 200 mm/s^2): maximum acceleration for trajectory execution. If set to zero, the driver will use a rectangular velocity profile instead of a trapezoidal one. **Pose mode only.**
 
-This package also includes a simple keyboard teleoperation node that can be used to test the driver. It publishes commands in the task space, so make sure to launch the driver in pose mode. Also do note that PyKDL is required to run the teleoperation node, so make sure to install it beforehand:
-
-```bash
-pip install PyKDL
-```
+This package also includes a simple keyboard teleoperation node that can be used to test the driver. It publishes commands in the task space, so make sure to launch the driver in pose mode.
 
 ### Examples
 
@@ -71,7 +79,15 @@ ros2 run abb_egm_driver egm_driver --ros-args -p command_mode:=corr
 All default parameters, and example keyboard-control app:
 
 ```bash
-ros2 run abb_egm_driver egm_driver --ros-args -p egm_port:=6510 -p smooth_factor:=0.02 -p publish_period:=10 -p command_mode:=pose -p command_period:=4
+ros2 run abb_egm_driver egm_driver --ros-args \
+     -p egm_port:=6510 \
+     -p smooth_factor:=0.02 \
+     -p publish_period:=10 \
+     -p command_mode:=pose \
+     -p command_period:=4 \
+     -p max_velocity:=250 \
+     -p max_acceleration:=200
+
 ros2 run abb_egm_driver keyboard_teleop
 ```
 
