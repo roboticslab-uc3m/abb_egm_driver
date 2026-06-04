@@ -38,7 +38,10 @@ EGM_MODE = CommandMode.POSE
 DATA_LENGTH = 40
 
 # default maximum velocity for trajectory execution (mm/s)
-MAX_VELOCITY = 100 # mm/s
+MAX_VELOCITY = 250 # mm/s
+
+# default maximum acceleration for trajectory execution (mm/s^2)
+MAX_ACCELERATION = 200 # mm/s^2
 
 class EGMDriver(Node):
     def __init__(self):
@@ -145,6 +148,14 @@ class EGMDriver(Node):
             self.max_velocity = max_velocity_param.get_parameter_value().integer_value
 
             self.get_logger().info(f'Using max_velocity (trajectories): {self.max_velocity} mm/s')
+
+            max_acceleration_param = self.declare_parameter('max_acceleration', MAX_ACCELERATION,
+                                                            ParameterDescriptor(description='Maximum acceleration for trajectory execution (mm/s^2), "0" means rectangular profile, otherwise trapezoidal',
+                                                                                integer_range=[IntegerRange(from_value=0, to_value=math.inf)]))
+
+            self.max_acceleration = max_acceleration_param.get_parameter_value().integer_value
+
+            self.get_logger().info(f'Using max_acceleration (trajectories): {self.max_acceleration} mm/s^2')
         elif self.command_mode == CommandMode.JOINT:
             self.subscription_cmd = self.create_subscription(Float32MultiArray, 'command/joint', self.joint_listener_callback, 10)
         elif self.command_mode == CommandMode.CORR:
@@ -186,14 +197,21 @@ class EGMDriver(Node):
         H_base_end = kdl.Frame(end_orient, end_pos)
 
         path = m3.PathLine(H_base_start, H_base_end)
-        profile = m3.VelocityProfileRectangular(self.max_velocity)
+
+        if self.max_acceleration > 0:
+            profile = m3.VelocityProfileTrapezoidal(self.max_velocity, self.max_acceleration)
+            type_str = 'trapezoidal'
+        else:
+            profile = m3.VelocityProfileRectangular(self.max_velocity)
+            type_str = 'rectangular'
+
         profile.set_profile(0, path.path_length())
         self.trajectory = m3.TrajectorySegment(path, profile, profile.duration())
 
         self.trajectory_start_time = self.get_clock().now()
         self.is_processing_trajectory = True
 
-        self.get_logger().info(f'Starting trajectory execution. Duration: {self.trajectory.duration():.2f} seconds, length: {path.path_length():.2f} mm.')
+        self.get_logger().info(f'Starting {type_str} trajectory execution. Duration: {self.trajectory.duration():.2f} seconds, length: {path.path_length():.2f} mm.')
 
     def joint_listener_callback(self, msg):
         if self.current_joint is None:
@@ -273,6 +291,9 @@ class EGMDriver(Node):
             elif param.name == 'max_velocity':
                 self.max_velocity = param.value
                 self.get_logger().info(f'Updated max_velocity: {self.max_velocity} mm/s')
+            elif param.name == 'max_acceleration':
+                self.max_acceleration = param.value
+                self.get_logger().info(f'Updated max_acceleration: {self.max_acceleration} mm/s^2')
 
         return SetParametersResult(successful=True)
 

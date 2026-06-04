@@ -225,8 +225,8 @@ class VelocityProfile(ABC):
         pass
 
 class VelocityProfileRectangular(VelocityProfile):
-    def __init__(self, maxvel: float):
-        self._maxvel = maxvel
+    def __init__(self, max_velocity: float):
+        self._max_velocity = max_velocity
         self._duration = 0
         self._position = 0
         self._velocity = 0
@@ -251,14 +251,14 @@ class VelocityProfileRectangular(VelocityProfile):
     def duration(self) -> float:
         return self._duration
 
-    def set_max_velocity(self, maxvel: float) -> None:
-        self._maxvel = maxvel
+    def set_maximum(self, velocity: float) -> None:
+        self._max_velocity = velocity
 
     def set_profile(self, pos1: float, pos2: float) -> None:
         diff = pos2 - pos1
 
         if diff != 0:
-            self._velocity = self._maxvel if diff > 0 else -self._maxvel
+            self._velocity = self._max_velocity if diff > 0 else -self._max_velocity
             self._position = pos1
             self._duration = diff / self._velocity
         else:
@@ -272,8 +272,8 @@ class VelocityProfileRectangular(VelocityProfile):
         if diff != 0:
             self._velocity = diff / duration
 
-            if self._velocity > self._maxvel or duration == 0:
-                self._velocity = self._maxvel
+            if self._velocity > self._max_velocity or duration == 0:
+                self._velocity = self._max_velocity
 
             self._position = pos1
             self._duration = diff / self._velocity
@@ -281,6 +281,138 @@ class VelocityProfileRectangular(VelocityProfile):
             self._velocity = 0
             self._position = pos1
             self._duration = 0
+
+class VelocityProfileTrapezoidal(VelocityProfile):
+    def __init__(self, max_velocity: float, max_acceleration: float):
+        self._max_velocity = max_velocity
+        self._max_acceleration = max_acceleration
+
+        self._start_pos = 0
+        self._end_pos = 0
+
+        self._duration = 0
+
+        self._t1 = 0
+        self._t2 = 0
+
+        self._a1 = 0
+        self._a2 = 0
+        self._a3 = 0
+
+        self._b1 = 0
+        self._b2 = 0
+        self._b3 = 0
+
+        self._c1 = 0
+        self._c2 = 0
+        self._c3 = 0
+
+    def position(self, time: float) -> float:
+        if time < 0:
+            return self._start_pos
+        elif time < self._t1:
+            return self._a1 + time * (self._a2 + self._a3 * time)
+        elif time < self._t2:
+            return self._b1 + time * (self._b2 + self._b3 * time)
+        elif time <= self._duration:
+            return self._c1 + time * (self._c2 + self._c3 * time)
+        else:
+            return self._end_pos
+
+    def velocity(self, time: float) -> float:
+        if time < 0:
+            return 0
+        elif time < self._t1:
+            return self._a2 + 2 * self._a3 * time
+        elif time < self._t2:
+            return self._b2 + 2 * self._b3 * time
+        elif time <= self._duration:
+            return self._c2 + 2 * self._c3 * time
+        else:
+            return 0
+
+    def acceleration(self, time: float) -> float:
+        if time < 0:
+            return 0
+        elif time < self._t1:
+            return 2 * self._a3
+        elif time < self._t2:
+            return 2 * self._b3
+        elif time <= self._duration:
+            return 2 * self._c3
+        else:
+            return 0
+
+    def duration(self) -> float:
+        return self._duration
+
+    def set_maximum(self, velocity: float, acceleration: float) -> None:
+        self._max_velocity = velocity
+        self._max_acceleration = acceleration
+
+    def set_profile(self, pos1: float, pos2: float) -> None:
+        self._start_pos = pos1
+        self._end_pos = pos2
+        self._t1 = self._max_velocity / self._max_acceleration
+
+        s = math.copysign(1, pos2 - pos1)
+        delta_x1 = s * self._max_acceleration * (self._t1 ** 2) / 2.0
+        delta_T = (pos2 - pos1 - 2 * delta_x1) / (s * self._max_velocity)
+
+        if delta_T > 0.0:
+            self._duration = 2 * self._t1 + delta_T
+            self._t2 = self._duration - self._t1
+        else:
+            self._t1 = math.sqrt((pos2 - pos1) / (s * self._max_acceleration))
+            self._duration = 2 * self._t1
+            self._t2 = self._t1
+
+        self._a3 = s * self._max_acceleration / 2.0
+        self._a2 = 0
+        self._a1 = pos1
+
+        self._b3 = 0
+        self._b2 = self._a2 + 2 * self._a3 * self._t1 - 2.0 * self._b3 * self._t1
+        self._b1 = self._a1 + self._t1 * (self._a2 + self._a3 * self._t1) - self._t1 * (self._b2 + self._b3 * self._t1)
+
+        self._c3 = -s * self._max_acceleration / 2.0
+        self._c2 = self._b2 + 2 * self._b3 * self._t2 - 2.0 * self._c3 * self._t2
+        self._c1 = self._b1 + self._t2 * (self._b2 + self._b3 * self._t2) - self._t2 * (self._c2 + self._c3 * self._t2)
+
+    def set_profile_duration(self, pos1: float, pos2: float, duration: float) -> None:
+        self.set_profile(pos1, pos2)
+
+        factor = self._duration / duration
+
+        if factor > 1.0:
+            return
+
+        self._a2 *= factor
+        self._a3 *= factor * factor
+        self._b2 *= factor
+        self._b3 *= factor * factor
+        self._c2 *= factor
+        self._c3 *= factor * factor
+
+        self._duration = duration
+        self._t1 /= factor
+        self._t2 /= factor
+
+    def set_profile_velocity(self, pos1: float, pos2: float, velocity: float) -> None:
+        self.set_profile(pos1, pos2)
+
+        factor = min(1.0, max(1e-6, velocity))
+
+        self._a2 *= factor
+        self._a3 *= factor * factor
+        self._b2 *= factor
+        self._b3 *= factor * factor
+        self._c2 *= factor
+        self._c3 *= factor * factor
+
+        self._duration /= factor
+        self._t1 /= factor
+        self._t2 /= factor
 
 class Trajectory(ABC):
     @abstractmethod
