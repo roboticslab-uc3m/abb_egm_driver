@@ -3,7 +3,7 @@ from rclpy.node import FloatingPointRange, Node
 from geometry_msgs.msg import Point, Pose
 from std_msgs.msg import Float32MultiArray, Float64MultiArray, Bool
 from sensor_msgs.msg import JointState
-from rcl_interfaces.msg import ParameterDescriptor
+from rcl_interfaces.msg import ParameterDescriptor, SetParametersResult
 from ABBRobotEGM import EGM
 from enum import Enum
 import math
@@ -72,8 +72,8 @@ class EGMDriver(Node):
         self.data_out = None
 
         smooth_factor_param = self.declare_parameter('smooth_factor', SMOOTH_FACTOR,
-                                                      ParameterDescriptor(description='Smoothing factor for low-pass filter (lower is smoother)',
-                                                                          floating_point_range=[FloatingPointRange(from_value=0.0, to_value=1.0)]))
+                                                     ParameterDescriptor(description='Smoothing factor for low-pass filter (lower is smoother)',
+                                                                         floating_point_range=[FloatingPointRange(from_value=0.0, to_value=1.0)]))
 
         self.smooth_factor = smooth_factor_param.get_parameter_value().double_value
 
@@ -137,6 +137,8 @@ class EGMDriver(Node):
         if self.command_mode != CommandMode.CORR:
             self.subscription_do = self.create_subscription(Bool, 'command/do', self.do_listener_callback, 10)
             self.subscription_data = self.create_subscription(Float64MultiArray, 'command/data', self.data_listener_callback, 10)
+
+        self.parameter_callback_handle = self.add_on_set_parameters_callback(self.parameter_update_callback)
 
         self.running = True
         self.initialized = False
@@ -211,6 +213,14 @@ class EGMDriver(Node):
             elif self.command_mode == CommandMode.CORR:
                 self.current_send_corr = [self.filter(self.current_send_corr[i], self.target_corr[i]) for i in range(3)] # type: ignore
                 egm.send_to_robot_path_corr(self.current_send_corr)
+
+    def parameter_update_callback(self, params):
+        for param in params:
+            if param.name == 'smooth_factor':
+                self.smooth_factor = param.value
+                self.get_logger().info(f'Updated smooth_factor: {self.smooth_factor}')
+
+        return SetParametersResult(successful=True)
 
     def run_egm_loop(self):
         with EGM(port=self.egm_port) as egm:
