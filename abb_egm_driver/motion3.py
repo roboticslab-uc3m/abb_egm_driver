@@ -1,9 +1,56 @@
 import math
 import PyKDL as kdl
 from abc import ABC, abstractmethod
+from typing import Union
 
 # based on OROCOS Kinematics and Dynamics Library, licensed under LGPL v2.1
 # https://github.com/orocos/orocos_kinematics_dynamics
+
+class RotationalInterpolation(ABC):
+    @abstractmethod
+    def set_start_end(self, start: kdl.Rotation, end: kdl.Rotation) -> None:
+        pass
+
+    @abstractmethod
+    def angle(self) -> float:
+        pass
+
+    @abstractmethod
+    def position(self, theta: float) -> kdl.Rotation:
+        pass
+
+    @abstractmethod
+    def velocity(self, theta: float, thetad: float) -> kdl.Vector:
+        pass
+
+    @abstractmethod
+    def acceleration(self, theta: float, thetad: float, thetadd: float) -> kdl.Vector:
+        pass
+
+class RotationalInterpolationSingleAxis(RotationalInterpolation):
+    def __init__(self):
+        self._R_base_start = kdl.Rotation.Identity()
+        self._R_base_end = kdl.Rotation.Identity()
+        self._rot_start_end = kdl.Vector.Zero()
+        self._angle = 0.0
+
+    def set_start_end(self, start: kdl.Rotation, end: kdl.Rotation) -> None:
+        self._R_base_start = kdl.Rotation(start)
+        self._R_base_end = kdl.Rotation(end)
+        R_start_end = self._R_base_start.Inverse() * self._R_base_end
+        self._angle, self._rot_start_end = R_start_end.GetRotAngle()
+
+    def angle(self) -> float:
+        return self._angle
+
+    def position(self, theta: float) -> kdl.Rotation:
+        return self._R_base_start * kdl.Rotation.Rot2(self._rot_start_end, theta)
+
+    def velocity(self, theta: float, thetad: float) -> kdl.Vector:
+        return self._R_base_start * (self._rot_start_end * thetad)
+
+    def acceleration(self, theta: float, thetad: float, thetadd: float) -> kdl.Vector:
+        return self._R_base_start * (self._rot_start_end * thetadd)
 
 class Path(ABC):
     @abstractmethod
@@ -22,75 +69,135 @@ class Path(ABC):
     def path_length(self) -> float:
         pass
 
+    @abstractmethod
+    def parameterized_length(self, s: float) -> float:
+        pass
+
 class PathLine(Path):
-    def __init__(self, H_base_start: kdl.Frame, H_base_end: kdl.Frame):
+    def __init__(self, H_base_start: kdl.Frame, reference: Union[kdl.Frame, kdl.Twist], eqradius: float = 1.0):
         self._p_base_start = kdl.Vector(H_base_start.p)
-        self._p_base_end = kdl.Vector(H_base_end.p)
+        self._orient_interp = RotationalInterpolationSingleAxis()
+        self._eqradius = eqradius
+
+        if isinstance(reference, kdl.Frame):
+            self._p_base_end = kdl.Vector(reference.p)
+            self._orient_interp.set_start_end(H_base_start.M, reference.M)
+        elif isinstance(reference, kdl.Twist):
+            self._p_base_end = H_base_start.p + reference.vel
+            self._orient_interp.set_start_end(H_base_start.M, H_base_start * kdl.Frame(kdl.Rotation.Rot(reference.rot, reference.rot.Norm()), reference.vel).M)
+        else:
+            raise ValueError('Reference must be either kdl.Frame or kdl.Twist')
+
         self._p_start_end = self._p_base_end - self._p_base_start
-        self._pathlength = self._p_start_end.Normalize()
+
+        distance = self._p_start_end.Normalize()
+        alpha = self._orient_interp.angle()
+
+        if alpha != 0 and alpha * self._eqradius > distance:
+            self._pathlength = alpha * self._eqradius
+            self._scale_rot = 1.0 / self._eqradius
+            self._scale_lin = distance / self._pathlength
+        elif distance != 0:
+            self._pathlength = distance
+            self._scale_rot = alpha / distance
+            self._scale_lin = 1.0
+        else:
+            self._pathlength = 0.0
+            self._scale_rot = 1.0
+            self._scale_lin = 1.0
 
     def position(self, s: float) -> kdl.Frame:
-        return kdl.Frame(self._p_base_start + self._p_start_end * s)
+        rot = self._orient_interp.position(s * self._scale_rot)
+        pos = self._p_base_start + self._p_start_end * s * self._scale_lin
+        return kdl.Frame(rot, pos)
 
     def velocity(self, s: float, sd: float) -> kdl.Twist:
-        return kdl.Twist(self._p_start_end * sd, kdl.Vector.Zero())
+        pos = self._p_start_end * sd * self._scale_lin
+        rot = self._orient_interp.velocity(s * self._scale_rot, sd * self._scale_rot)
+        return kdl.Twist(pos, rot)
 
     def acceleration(self, s: float, sd: float, sdd: float) -> kdl.Twist:
-        return kdl.Twist(self._p_start_end * sdd, kdl.Vector.Zero())
+        pos = self._p_start_end * sdd * self._scale_lin
+        rot = self._orient_interp.acceleration(s * self._scale_rot, sd * self._scale_rot, sdd * self._scale_rot)
+        return kdl.Twist(pos, rot)
 
     def path_length(self) -> float:
         return self._pathlength
+
+    def parameterized_length(self, s: float) -> float:
+        return s * self._scale_lin
 
 class PathCircle(Path):
-    def __init__(self, H_base_start: kdl.Frame, p_base_center: kdl.Vector, alpha: float):
-        self._H_base_start = kdl.Frame(H_base_start)
+    def __init__(self, H_base_start: kdl.Frame, p_base_center: kdl.Vector, p_base_p: kdl.Vector, R_base_end: kdl.Rotation, alpha: float, eqradius: float = 1.0):
         self._H_base_center = kdl.Frame.Identity()
         self._H_base_center.p = kdl.Vector(p_base_center)
-        self._alpha = alpha
+        self._orient_interp = RotationalInterpolationSingleAxis()
+        self._eqradius = eqradius
 
-        # vector from the center to the start point
+        self._orient_interp.set_start_end(H_base_start.M, R_base_end)
+        oalpha = self._orient_interp.angle()
         self._radius_vector = H_base_start.p - self._H_base_center.p
-        self._radius = self._radius_vector.Norm()
+        self._radius = self._radius_vector.Normalize()
 
-        # arc that will be traveled
-        self._pathlength = abs(alpha * self._radius)
-        self._direction = 1 if alpha > 0 else -1
+        if self._radius < 1e-6:
+            raise ValueError('Start point cannot be the same as the center of the circle')
+
+        temp = p_base_p - self._H_base_center.p
+        temp.Normalize()
+
+        z = self._radius_vector * temp
+        n = z.Normalize()
+
+        if n < 1e-6:
+            raise ValueError('Start point, center and point on the circle cannot be collinear')
+
+        self._H_base_center.M = kdl.Rotation(self._radius_vector, z * self._radius_vector, z)
+        distance = alpha * self._radius
+
+        if oalpha * eqradius > distance:
+            self._pathlength = oalpha * eqradius
+            self._scale_rot = 1.0 / eqradius
+            self._scale_lin = distance / self._pathlength
+        else:
+            self._pathlength = distance
+            self._scale_rot = oalpha / distance
+            self._scale_lin = 1.0
 
     def position(self, s: float) -> kdl.Frame:
-        angle = self._direction * s / self._radius
-        cos_angle = math.cos(angle)
-        sin_angle = math.sin(angle)
-
-        # rotation in plane XY around the center
-        p = self._H_base_center * kdl.Vector(self._radius_vector.x() * cos_angle - self._radius_vector.y() * sin_angle,
-                                             self._radius_vector.x() * sin_angle + self._radius_vector.y() * cos_angle,
-                                             self._radius_vector.z())
-
-        return kdl.Frame(p)
+        angle = s * self._scale_lin / self._radius
+        rot = self._orient_interp.position(s * self._scale_rot)
+        pos = self._H_base_center * kdl.Vector(self._radius * math.cos(angle), self._radius * math.sin(angle), 0.0)
+        return kdl.Frame(rot, pos)
 
     def velocity(self, s: float, sd: float) -> kdl.Twist:
-        angle = self._direction * s / self._radius
-        v = sd / self._radius
-        cos_angle = math.cos(angle)
-        sin_angle = math.sin(angle)
+        p = s * self._scale_lin / self._radius
+        v = sd * self._scale_lin / self._radius
 
-        return kdl.Twist(kdl.Vector(-self._radius * sin_angle * v,
-                                    self._radius * cos_angle * v,
-                                    0), kdl.Vector.Zero())
+        vel_pos = self._H_base_center.M * kdl.Vector(-self._radius * math.sin(p) * v, self._radius * math.cos(p) * v, 0.0)
+        vel_rot = self._orient_interp.velocity(s * self._scale_rot, sd * self._scale_rot)
+
+        return kdl.Twist(vel_pos, vel_rot)
 
     def acceleration(self, s: float, sd: float, sdd: float) -> kdl.Twist:
-        angle = self._direction * s / self._radius
-        v = sd / self._radius
-        a = sdd / self._radius
-        cos_angle = math.cos(angle)
-        sin_angle = math.sin(angle)
+        p = s * self._scale_lin / self._radius
+        v = sd * self._scale_lin / self._radius
+        a = sdd * self._scale_lin / self._radius
 
-        return kdl.Twist(kdl.Vector(-self._radius * cos_angle * v * v - self._radius * sin_angle * a,
-                                    -self._radius * sin_angle * v * v + self._radius * cos_angle * a,
-                                    0), kdl.Vector.Zero())
+        cos_p = math.cos(p)
+        sin_p = math.sin(p)
+
+        vel_pos = self._H_base_center.M * kdl.Vector(-self._radius * cos_p * v * v - self._radius * sin_p * a,
+                                                      -self._radius * sin_p * v * v + self._radius * cos_p * a,
+                                                      0.0)
+        vel_rot = self._orient_interp.acceleration(s * self._scale_rot, sd * self._scale_rot, sdd * self._scale_rot)
+
+        return kdl.Twist(vel_pos, vel_rot)
 
     def path_length(self) -> float:
         return self._pathlength
+
+    def parameterized_length(self, s: float) -> float:
+        return s / self._scale_lin
 
 class VelocityProfile(ABC):
     @abstractmethod
