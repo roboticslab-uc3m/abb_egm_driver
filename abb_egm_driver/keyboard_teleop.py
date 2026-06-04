@@ -4,6 +4,7 @@ import tty
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Pose
+from std_msgs.msg import Bool
 from PyKDL import Rotation
 
 help = """
@@ -21,6 +22,7 @@ Rotation:
    r/y : +RZ/-RZ
 
 i: print this help message
+ENTER: enable/disable tool
 SPACE: return to home
 CTRL-C: exit
 """
@@ -62,7 +64,8 @@ class KeyboardCommander(Node):
     def __init__(self):
         super().__init__('keyboard_teleop')
 
-        self.publisher = self.create_publisher(Pose, 'command/pose', 10)
+        self.pose_publisher = self.create_publisher(Pose, 'command/pose', 10)
+        self.do_publisher = self.create_publisher(Bool, 'command/do', 10)
 
         self.x = HOME_X
         self.y = HOME_Y
@@ -73,9 +76,11 @@ class KeyboardCommander(Node):
         self.ry = HOME_RY
         self.rz = HOME_RZ
 
+        self.do_state = False
+
         print(help)
 
-    def publish_pos(self):
+    def publish_pose(self):
         pose = Pose()
 
         pose.position.x = self.x
@@ -87,8 +92,15 @@ class KeyboardCommander(Node):
         pose.orientation.y = self.ry
         pose.orientation.z = self.rz
 
-        self.publisher.publish(pose)
+        self.pose_publisher.publish(pose)
         print(f'Target: X={self.x:.2f} Y={self.y:.2f} Z={self.z:.2f} || QW={self.rw:.2f} QX={self.rx:.2f} QY={self.ry:.2f} QZ={self.rz:.2f}\r')
+
+    def publish_do(self):
+        msg = Bool()
+        msg.data = self.do_state
+        self.do_publisher.publish(msg)
+        print(f'Tool {"ENABLED" if self.do_state else "DISABLED"}\r')
+        self.do_state = not self.do_state # set for next toggle
 
 def main():
     settings = termios.tcgetattr(sys.stdin)
@@ -96,7 +108,8 @@ def main():
     node = KeyboardCommander()
 
     try:
-        node.publish_pos()
+        node.publish_pose()
+        node.publish_do()
 
         while True:
             key = getKey(settings)
@@ -106,7 +119,7 @@ def main():
                 node.x += dx
                 node.y += dy
                 node.z += dz
-                node.publish_pos()
+                node.publish_pose()
 
             elif key in ROTATE_BINDINGS.keys():
                 drx, dry, drz = ROTATE_BINDINGS[key]
@@ -115,7 +128,10 @@ def main():
                 rot.DoRotY(dry)
                 rot.DoRotZ(drz)
                 node.rx, node.ry, node.rz, node.rw = rot.GetQuaternion()
-                node.publish_pos()
+                node.publish_pose()
+
+            elif key == '\r':  # ENTER
+                node.publish_do()
 
             elif key == ' ':
                 node.x = HOME_X
@@ -128,7 +144,7 @@ def main():
                 node.rz = HOME_RZ
 
                 print("\nRESET TO HOME!\n")
-                node.publish_pos()
+                node.publish_pose()
 
             elif key == 'i':
                 print(help)
