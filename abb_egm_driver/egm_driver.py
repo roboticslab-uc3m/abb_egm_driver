@@ -1,5 +1,5 @@
 import rclpy
-from rclpy.node import FloatingPointRange, IntegerRange, Node
+from rclpy.node import FloatingPointRange, IntegerRange, Node, Parameter
 from geometry_msgs.msg import Point, Pose
 from std_msgs.msg import Float32MultiArray, Float64MultiArray, Bool
 from sensor_msgs.msg import JointState
@@ -136,10 +136,11 @@ class EGMDriver(Node):
 
         self.divisor = command_period / EGM_PERIOD
         self.counter = 0
+        self.using_dh = False
 
         if self.command_mode == CommandMode.POSE:
-            self.subscription_cmd = self.create_subscription(Pose, 'command/pose', self.pose_listener_callback, 10)
-            self.subscription_traj_cmd = self.create_subscription(Pose, 'trajectory/pose', self.trajectory_pose_listener_callback, 10)
+            self.subscription_pose_cmd = self.create_subscription(Pose, 'command/pose', self.pose_listener_callback, 10)
+            self.subscription_traj_pose = self.create_subscription(Pose, 'trajectory/pose', self.trajectory_pose_listener_callback, 10)
 
             max_velocity_param = self.declare_parameter('max_velocity', MAX_VELOCITY,
                                                         ParameterDescriptor(description='Maximum velocity for trajectory execution (mm/s)',
@@ -156,10 +157,17 @@ class EGMDriver(Node):
             self.max_acceleration = max_acceleration_param.get_parameter_value().integer_value
 
             self.get_logger().info(f'Using max_acceleration (trajectories): {self.max_acceleration} mm/s^2')
+
+            if self._parse_dh_parameters():
+                self.subscription_joint_cmd = self.create_subscription(Float32MultiArray, 'command/joint', self.joint_listener_callback, 10)
+                self.using_dh = True
+                self.get_logger().info('DH parameters provided, joint commands are enabled in pose command mode.')
+            else:
+                self.get_logger().info('No valid DH parameters provided, joint commands are disabled in pose command mode.')
         elif self.command_mode == CommandMode.JOINT:
-            self.subscription_cmd = self.create_subscription(Float32MultiArray, 'command/joint', self.joint_listener_callback, 10)
+            self.subscription_joint_cmd = self.create_subscription(Float32MultiArray, 'command/joint', self.joint_listener_callback, 10)
         elif self.command_mode == CommandMode.CORR:
-            self.subscription_cmd = self.create_subscription(Point, 'command/path_corr', self.corr_listener_callback, 10)
+            self.subscription_corr_cmd = self.create_subscription(Point, 'command/path_corr', self.corr_listener_callback, 10)
         else:
             self.get_logger().error('Invalid command mode. This should never happen due to parameter validation.')
 
@@ -176,6 +184,42 @@ class EGMDriver(Node):
         self.egm_thread.start()
 
         self.get_logger().info('EGM Driver is ready and running.')
+
+    def _parse_dh_parameters(self):
+        DoubleT = Parameter.Type.DOUBLE
+
+        # using the Tuple[str, Parameter.Type] signature allows to have NOT_SET parameters
+        # at the cost of not being able to specify ParameterDescriptor(read_only=True)
+        dh_params = self.declare_parameters('dh_parameters',
+                                            [('link_1.theta', DoubleT), ('link_1.D', DoubleT), ('link_1.A', DoubleT), ('link_1.alpha', DoubleT),
+                                             ('link_2.theta', DoubleT), ('link_2.D', DoubleT), ('link_2.A', DoubleT), ('link_2.alpha', DoubleT),
+                                             ('link_3.theta', DoubleT), ('link_3.D', DoubleT), ('link_3.A', DoubleT), ('link_3.alpha', DoubleT),
+                                             ('link_4.theta', DoubleT), ('link_4.D', DoubleT), ('link_4.A', DoubleT), ('link_4.alpha', DoubleT),
+                                             ('link_5.theta', DoubleT), ('link_5.D', DoubleT), ('link_5.A', DoubleT), ('link_5.alpha', DoubleT),
+                                             ('link_6.theta', DoubleT), ('link_6.D', DoubleT), ('link_6.A', DoubleT), ('link_6.alpha', DoubleT),
+                                             ('link_7.theta', DoubleT), ('link_7.D', DoubleT), ('link_7.A', DoubleT), ('link_7.alpha', DoubleT)])
+
+        self.chain = kdl.Chain()
+
+        for i in range(0, len(dh_params), 4):
+            if all(param.type_ != Parameter.Type.NOT_SET for param in dh_params[i:i + 4]):
+                theta = dh_params[i + 0].get_parameter_value().double_value
+                D = dh_params[i + 1].get_parameter_value().double_value
+                A = dh_params[i + 2].get_parameter_value().double_value
+                alpha = dh_params[i + 3].get_parameter_value().double_value
+
+                self.get_logger().info(f'Parsed DH parameters for link {i // 4 + 1}: theta={theta}°, D={D}mm, A={A}mm, alpha={alpha}°')
+
+                H = kdl.Frame.DH(A, math.radians(alpha), D, math.radians(theta))
+                segment = kdl.Segment(kdl.Joint(kdl.Joint.RotZ), H)
+                self.chain.addSegment(segment)
+
+        if self.chain.getNrOfJoints() > 0:
+            self.get_logger().info(f'Total DH parameters parsed successfully. Robot model has {self.chain.getNrOfJoints()} joints.')
+            self.fk_solver = kdl.ChainFkSolverPos_recursive(self.chain)
+            return True
+
+        return False
 
     def pose_listener_callback(self, msg):
         self.target_pos = [msg.position.x * 1000.0, msg.position.y * 1000.0, msg.position.z * 1000.0]
@@ -222,7 +266,23 @@ class EGMDriver(Node):
             self.get_logger().warning(f'Received joint command with incorrect number of joints. Expected {len(self.current_joint)}, got {len(msg.data)}.')
             return
 
-        self.target_joint = list(map(math.degrees, msg.data))
+        if not self.using_dh:
+            self.target_joint = list(map(math.degrees, msg.data))
+        elif len(msg.data) != self.chain.getNrOfJoints():
+            self.get_logger().warning(f'Received joint command with incorrect number of joints for DH model. Expected {self.chain.getNrOfJoints()}, got {len(msg.data)}.')
+        else:
+            q = kdl.JntArray(self.chain.getNrOfJoints())
+            H = kdl.Frame()
+
+            for i in range(len(msg.data)):
+                q[i] = msg.data[i]
+
+            self.fk_solver.JntToCart(q, H)
+            (kx, ky, kz, kw) = H.M.GetQuaternion()
+
+            self.target_pos = [H.p.x(), H.p.y(), H.p.z()]
+            self.target_orient = [kw, kx, ky, kz]
+            self.is_processing_trajectory = False
 
     def corr_listener_callback(self, msg):
         self.target_corr = [msg.x * 1000.0, msg.y * 1000.0, msg.z * 1000.0]
