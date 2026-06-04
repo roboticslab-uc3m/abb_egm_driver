@@ -1,5 +1,5 @@
 import rclpy
-from rclpy.node import Node
+from rclpy.node import FloatingPointRange, Node
 from geometry_msgs.msg import Point, Pose
 from std_msgs.msg import Float32MultiArray, Float64MultiArray, Bool
 from sensor_msgs.msg import JointState
@@ -73,15 +73,11 @@ class EGMDriver(Node):
 
         smooth_factor_param = self.declare_parameter('smooth_factor', SMOOTH_FACTOR,
                                                       ParameterDescriptor(description='Smoothing factor for low-pass filter (lower is smoother)',
-                                                                          additional_constraints='0.0 <= smooth_factor <= 1.0'))
+                                                                          floating_point_range=[FloatingPointRange(from_value=0.0, to_value=1.0)]))
 
         self.smooth_factor = smooth_factor_param.get_parameter_value().double_value
 
-        if self.smooth_factor < 0.0 or self.smooth_factor > 1.0:
-            self.get_logger().warning(f'Invalid smooth_factor value. It must be between 0.0 and 1.0. Using default value: {SMOOTH_FACTOR}')
-            self.smooth_factor = SMOOTH_FACTOR
-        else:
-            self.get_logger().info(f'Using smooth_factor: {self.smooth_factor}')
+        self.get_logger().info(f'Using smooth_factor: {self.smooth_factor}')
 
         publish_period_param = self.declare_parameter('publish_period', PUBLISH_PERIOD,
                                                       ParameterDescriptor(description='Period for publishing robot state (in milliseconds, use <= 0 for no publishing)',
