@@ -1,5 +1,5 @@
 import rclpy
-from rclpy.node import FloatingPointRange, Node
+from rclpy.node import FloatingPointRange, IntegerRange, Node
 from geometry_msgs.msg import Point, Pose
 from std_msgs.msg import Float32MultiArray, Float64MultiArray, Bool
 from sensor_msgs.msg import JointState
@@ -38,7 +38,7 @@ EGM_MODE = CommandMode.POSE
 DATA_LENGTH = 40
 
 # default maximum velocity for trajectory execution (mm/s)
-MAX_VELOCITY = 100.0 # mm/s
+MAX_VELOCITY = 100 # mm/s
 
 class EGMDriver(Node):
     def __init__(self):
@@ -138,16 +138,13 @@ class EGMDriver(Node):
             self.subscription_cmd = self.create_subscription(Pose, 'command/pose', self.pose_listener_callback, 10)
             self.subscription_traj_cmd = self.create_subscription(Pose, 'trajectory/pose', self.trajectory_pose_listener_callback, 10)
 
-            maxvel_param = self.declare_parameter('max_velocity', MAX_VELOCITY,
-                                                  ParameterDescriptor(description='Maximum velocity for trajectory execution (mm/s)'))
+            max_velocity_param = self.declare_parameter('max_velocity', MAX_VELOCITY,
+                                                        ParameterDescriptor(description='Maximum velocity for trajectory execution (mm/s)',
+                                                                            integer_range=[IntegerRange(from_value=1, to_value=math.inf)]))
 
-            self.max_velocity = maxvel_param.get_parameter_value().double_value
+            self.max_velocity = max_velocity_param.get_parameter_value().integer_value
 
-            if self.max_velocity <= 0.0:
-                self.get_logger().warning(f'Invalid max_velocity (trajectories) value. It must be a positive number. Using default value: {MAX_VELOCITY} mm/s')
-                self.max_velocity = MAX_VELOCITY
-            else:
-                self.get_logger().info(f'Using max_velocity (trajectories): {self.max_velocity} mm/s')
+            self.get_logger().info(f'Using max_velocity (trajectories): {self.max_velocity} mm/s')
         elif self.command_mode == CommandMode.JOINT:
             self.subscription_cmd = self.create_subscription(Float32MultiArray, 'command/joint', self.joint_listener_callback, 10)
         elif self.command_mode == CommandMode.CORR:
@@ -273,6 +270,9 @@ class EGMDriver(Node):
             if param.name == 'smooth_factor':
                 self.smooth_factor = param.value
                 self.get_logger().info(f'Updated smooth_factor: {self.smooth_factor}')
+            elif param.name == 'max_velocity':
+                self.max_velocity = param.value
+                self.get_logger().info(f'Updated max_velocity: {self.max_velocity} mm/s')
 
         return SetParametersResult(successful=True)
 
