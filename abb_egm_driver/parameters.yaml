@@ -1,0 +1,77 @@
+egm_driver:
+  egm_port:
+    type: int
+    default_value: 6510
+    description: "Port for EGM communication"
+    read_only: true
+    validation:
+      bounds<>: [1, 65535]
+  smooth_factor:
+    type: double
+    default_value: 0.2
+    description: "Smoothing factor for low-pass filter (lower is smoother)"
+    read_only: false
+    validation:
+      bounds<>: [0.0, 1.0]
+  publish_period:
+    type: int
+    default_value: 10
+    description: "Period for publishing robot state (in milliseconds)"
+    read_only: true
+    validation:
+      gt<>: [0]
+  command_mode:
+    type: string
+    default_value: "pose"
+    description: "Control mode for incoming commands"
+    read_only: true
+    validation:
+      one_of<>: [["pose", "joint", "corr"]]
+  command_period:
+    type: int
+    default_value: 4
+    description: "Command period for EGM communication (in milliseconds)"
+    read_only: true
+    validation:
+      bounds<>: [1, 1000]
+  max_velocity:
+    type: double
+    default_value: 250.0
+    description: "Maximum velocity for trajectory generation (in mm/s)"
+    read_only: false
+    validation:
+      gt<>: [0.0]
+  max_acceleration:
+    type: double
+    default_value: 200.0
+    description: "Maximum acceleration for trajectory generation (in mm/s^2)"
+    read_only: false
+    validation:
+      gt<>: [0.0]
+  dh_parameters:
+    links:
+      type: string_array
+      default_value: ["link_1", "link_2", "link_3", "link_4", "link_5", "link_6", "link_7"]
+      description: "List of link names for DH parameters"
+      read_only: true
+    __map_links:
+      theta:
+        type: double
+        default_value: 0.0
+        description: "DH parameter theta"
+        read_only: true
+      D:
+        type: double
+        default_value: 0.0
+        description: "DH parameter D"
+        read_only: true
+      A:
+        type: double
+        default_value: 0.0
+        description: "DH parameter A"
+        read_only: true
+      alpha:
+        type: double
+        default_value: 0.0
+        description: "DH parameter alpha"
+        read_only: true
