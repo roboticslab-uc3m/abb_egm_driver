@@ -93,6 +93,10 @@ class KeyboardCommander(Node):
 
         print(help)
 
+        self.initialized = False
+
+        print('Waiting for initial pose and joint state...')
+
     def pose_listener_callback(self, msg):
         self.state_pose = copy.copy(msg)
 
@@ -183,18 +187,28 @@ def main():
     settings = termios.tcgetattr(sys.stdin)
     rclpy.init()
     node = KeyboardCommander()
-
-    thread = threading.Thread(target=do_key_action, args=(node, settings))
-    thread.start()
+    thread = None
 
     try:
+        while not node.initialized:
+            rclpy.spin_once(node, timeout_sec=0.1)
+
+            if node.state_pose is not None and node.state_joint is not None:
+                node.initialized = True
+                print('Initial pose and joint state received. You can now control the robot.')
+
+        thread = threading.Thread(target=do_key_action, args=(node, settings))
+        thread.start()
+
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
     finally:
-        thread.join()
-        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
+        if thread is not None:
+            thread.join()
+
         node.destroy_node()
+        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
 
 if __name__ == '__main__':
     main()
