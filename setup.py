@@ -24,7 +24,7 @@ setup(
         (os.path.join('share', package_name), ['package.xml']),
         (os.path.join('share', package_name), glob(os.path.join('config', '*.yaml'))),
     ],
-    install_requires=['setuptools', 'ABBRobotEGM'],
+    install_requires=['setuptools', 'ABBRobotEGM', 'PyKDL'],
     zip_safe=True,
     maintainer='Bartek Łukawski',
     maintainer_email='bwmn.peter@gmail.com',
