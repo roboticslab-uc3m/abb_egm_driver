@@ -1,15 +1,28 @@
+import os
+import sys
+
+from glob import glob
 from setuptools import find_packages, setup
 
 package_name = 'abb_egm_driver'
 
+if len(sys.argv) >= 2 and sys.argv[1] != 'clean':
+    from generate_parameter_library_py.setup_helper import generate_parameter_module
+
+    generate_parameter_module(
+        'parameters',
+        package_name + '/parameters.yaml'
+    )
+
 setup(
     name=package_name,
-    version='0.0.0',
+    version='0.1.0',
     packages=find_packages(exclude=['test']),
     data_files=[
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
-        ('share/' + package_name, ['package.xml']),
+        (os.path.join('share', package_name), ['package.xml']),
+        (os.path.join('share', package_name), glob(os.path.join('config', '*.yaml'))),
     ],
     install_requires=['setuptools', 'ABBRobotEGM', 'PyKDL'],
     zip_safe=True,

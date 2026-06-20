@@ -1,9 +1,8 @@
 import rclpy
-from rclpy.node import FloatingPointRange, IntegerRange, Node
+from rclpy.node import Node
 from geometry_msgs.msg import Point, Pose
 from std_msgs.msg import Float32MultiArray, Float64MultiArray, Bool
 from sensor_msgs.msg import JointState
-from rcl_interfaces.msg import ParameterDescriptor, SetParametersResult
 from ABBRobotEGM import EGM
 from enum import Enum
 import math
@@ -11,13 +10,12 @@ import threading
 import PyKDL as kdl
 import abb_egm_driver.motion3 as m3
 
-class CommandMode(Enum):
+from abb_egm_driver.parameters import egm_driver
+
+class Mode(Enum):
     POSE = 'pose'
     JOINT = 'joint'
     CORR = 'corr'
-
-# default EGM communication port
-EMG_PORT = 6510
 
 # default 4 ms period for EGM communication (250 Hz)
 EGM_PERIOD = 4
@@ -25,40 +23,16 @@ EGM_PERIOD = 4
 # default minimum period for path correction mode (ms)
 EGM_PATH_CORR_PERIOD = 24
 
-# EMA factor (low-pass filter, lower is smoother)
-SMOOTH_FACTOR = 0.02
-
-# ROS state publish period (in milliseconds)
-PUBLISH_PERIOD = 10
-
-# default guidance mode for incoming commands (pose or joint)
-EGM_MODE = CommandMode.POSE
-
 # fixed array size of 10 for incoming data from RAPID
 DATA_LENGTH = 40
-
-# default maximum velocity for trajectory execution (mm/s)
-MAX_VELOCITY = 250 # mm/s
-
-# default maximum acceleration for trajectory execution (mm/s^2)
-MAX_ACCELERATION = 200 # mm/s^2
 
 class EGMDriver(Node):
     def __init__(self):
         super().__init__('abb_egm_driver')
         self.get_logger().info('Starting EGM Driver...')
 
-        egm_port_param = self.declare_parameter('egm_port', EMG_PORT,
-                                                ParameterDescriptor(description='Port for EGM communication',
-                                                                    read_only=True))
-
-        self.egm_port = egm_port_param.get_parameter_value().integer_value
-
-        if self.egm_port <= 0 or self.egm_port > 65535:
-            self.get_logger().warning(f'Invalid EGM port number. It must be between 1 and 65535. Using default port: {EMG_PORT}')
-            self.egm_port = EMG_PORT
-        else:
-            self.get_logger().info(f'Using EGM port: {self.egm_port}')
+        self.param_listener = egm_driver.ParamListener(self)
+        self.params = self.param_listener.get_params()
 
         self.current_joint = None
         self.current_pos = None
@@ -83,91 +57,51 @@ class EGMDriver(Node):
         self.is_processing_trajectory = False
         self.trajectory_start_time = None
 
-        smooth_factor_param = self.declare_parameter('smooth_factor', SMOOTH_FACTOR,
-                                                     ParameterDescriptor(description='Smoothing factor for low-pass filter (lower is smoother)',
-                                                                         floating_point_range=[FloatingPointRange(from_value=0.0, to_value=1.0)]))
+        self.get_logger().info(f'Using EGM port: {self.params.egm_port}.')
+        self.get_logger().info(f'Using smooth_factor: {self.params.smooth_factor}.')
 
-        self.smooth_factor = smooth_factor_param.get_parameter_value().double_value
+        self.get_logger().info(f'Using publish_period: {self.params.publish_period} ms.')
+        self.publisher_joint = self.create_publisher(JointState, 'state/joint', 10)
+        self.publisher_pose = self.create_publisher(Pose, 'state/pose', 10)
+        self.publisher_data = self.create_publisher(Float64MultiArray, 'state/data', 10)
+        self.timer = self.create_timer(self.params.publish_period * 0.001, self.timer_callback)
 
-        self.get_logger().info(f'Using smooth_factor: {self.smooth_factor}')
+        self.get_logger().info(f'Using command_mode: {self.params.command_mode}.')
 
-        publish_period_param = self.declare_parameter('publish_period', PUBLISH_PERIOD,
-                                                      ParameterDescriptor(description='Period for publishing robot state (in milliseconds, use <= 0 for no publishing)',
-                                                                          read_only=True))
+        if self.params.command_period % EGM_PERIOD != 0 and self.params.command_mode in [Mode.POSE.value, Mode.JOINT.value]:
+            self.get_logger().warning(f'Command period of {self.params.command_period} ms is not a positive multiple of {EGM_PERIOD}, forcing to {EGM_PERIOD} ms.')
+            self.params.command_period = EGM_PERIOD
+        elif self.params.command_period % EGM_PATH_CORR_PERIOD != 0 and self.params.command_mode == Mode.CORR.value:
+            self.get_logger().warning(f'Command period of {self.params.command_period} ms is not a positive multiple of {EGM_PATH_CORR_PERIOD}, forcing to {EGM_PATH_CORR_PERIOD} ms.')
+            self.params.command_period = EGM_PATH_CORR_PERIOD
 
-        publish_period = publish_period_param.get_parameter_value().integer_value
-
-        if publish_period <= 0:
-            self.get_logger().info('Publishing of robot state is disabled (publish_period <= 0).')
-        else:
-            self.get_logger().info(f'Publishing of robot state is enabled (publish_period: {publish_period} milliseconds).')
-            self.publisher_joint = self.create_publisher(JointState, 'state/joint', 10)
-            self.publisher_pose = self.create_publisher(Pose, 'state/pose', 10)
-            self.publisher_data = self.create_publisher(Float64MultiArray, 'state/data', 10)
-            self.timer = self.create_timer(publish_period * 0.001, self.timer_callback)
-
-        command_mode_param = self.declare_parameter('command_mode', 'pose',
-                                                    ParameterDescriptor(description='Control mode for incoming commands (pose, joint or corr)',
-                                                                        additional_constraints='command_mode must be either "pose", "joint" or "corr"',
-                                                                        read_only=True))
-
-        command_mode_str = command_mode_param.get_parameter_value().string_value.lower()
-
-        if command_mode_str not in ['pose', 'joint', 'corr']:
-            self.get_logger().warning(f'Invalid command_mode value. It must be either "pose", "joint" or "corr". Using default mode: pose')
-            self.command_mode = EGM_MODE
-        else:
-            self.command_mode = CommandMode(command_mode_str)
-            self.get_logger().info(f'Using command_mode: {self.command_mode.value}')
-
-        command_period_param = self.declare_parameter('command_period', EGM_PATH_CORR_PERIOD if self.command_mode == CommandMode.CORR else EGM_PERIOD,
-                                                       ParameterDescriptor(description='Command period for EGM communication (in milliseconds)',
-                                                                           additional_constraints='Must be a multiple of 4 (pose and joint mode) or 24 (path correction mode)',
-                                                                           read_only=True))
-
-        command_period = command_period_param.get_parameter_value().integer_value
-
-        if command_period <= 0 or command_period % EGM_PERIOD != 0 and self.command_mode in [CommandMode.POSE, CommandMode.JOINT]:
-            self.get_logger().warning(f'Command period of {command_period} ms is not a positive multiple of {EGM_PERIOD}, forcing to {EGM_PERIOD} ms.')
-            command_period = EGM_PERIOD
-        elif command_period <= 0 or command_period % EGM_PATH_CORR_PERIOD != 0 and self.command_mode == CommandMode.CORR:
-            self.get_logger().warning(f'Command period of {command_period} ms is not a positive multiple of {EGM_PATH_CORR_PERIOD}, forcing to {EGM_PATH_CORR_PERIOD} ms.')
-            command_period = EGM_PATH_CORR_PERIOD
-
-        self.divisor = command_period / EGM_PERIOD
+        self.divisor = self.params.command_period / EGM_PERIOD
         self.counter = 0
+        self.using_dh = False
 
-        if self.command_mode == CommandMode.POSE:
-            self.subscription_cmd = self.create_subscription(Pose, 'command/pose', self.pose_listener_callback, 10)
-            self.subscription_traj_cmd = self.create_subscription(Pose, 'trajectory/pose', self.trajectory_pose_listener_callback, 10)
+        if self.params.command_mode == Mode.POSE.value:
+            self.subscription_pose_cmd = self.create_subscription(Pose, 'command/pose', self.pose_listener_callback, 10)
+            self.subscription_traj_pose = self.create_subscription(Pose, 'trajectory/pose', self.trajectory_pose_listener_callback, 10)
 
-            max_velocity_param = self.declare_parameter('max_velocity', MAX_VELOCITY,
-                                                        ParameterDescriptor(description='Maximum velocity for trajectory execution (mm/s)',
-                                                                            integer_range=[IntegerRange(from_value=1, to_value=math.inf)]))
+            self.get_logger().info(f'Using max_velocity (trajectories): {self.params.max_velocity} mm/s.')
+            self.get_logger().info(f'Using max_acceleration (trajectories): {self.params.max_acceleration} mm/s^2.')
 
-            self.max_velocity = max_velocity_param.get_parameter_value().integer_value
-
-            self.get_logger().info(f'Using max_velocity (trajectories): {self.max_velocity} mm/s')
-
-            max_acceleration_param = self.declare_parameter('max_acceleration', MAX_ACCELERATION,
-                                                            ParameterDescriptor(description='Maximum acceleration for trajectory execution (mm/s^2), "0" means rectangular profile, otherwise trapezoidal',
-                                                                                integer_range=[IntegerRange(from_value=0, to_value=math.inf)]))
-
-            self.max_acceleration = max_acceleration_param.get_parameter_value().integer_value
-
-            self.get_logger().info(f'Using max_acceleration (trajectories): {self.max_acceleration} mm/s^2')
-        elif self.command_mode == CommandMode.JOINT:
-            self.subscription_cmd = self.create_subscription(Float32MultiArray, 'command/joint', self.joint_listener_callback, 10)
-        elif self.command_mode == CommandMode.CORR:
-            self.subscription_cmd = self.create_subscription(Point, 'command/path_corr', self.corr_listener_callback, 10)
+            if self._parse_kinematic_parameters():
+                self.subscription_joint_cmd = self.create_subscription(Float32MultiArray, 'command/joint', self.joint_listener_callback, 10)
+                self.using_dh = True
+                self.get_logger().info('DH parameters provided, joint commands are enabled in pose command mode.')
+            else:
+                self.get_logger().info('No valid DH parameters provided, joint commands are disabled in pose command mode.')
+        elif self.params.command_mode == Mode.JOINT.value:
+            self.subscription_joint_cmd = self.create_subscription(Float32MultiArray, 'command/joint', self.joint_listener_callback, 10)
+        elif self.params.command_mode == Mode.CORR.value:
+            self.subscription_corr_cmd = self.create_subscription(Point, 'command/path_corr', self.corr_listener_callback, 10)
         else:
-            self.get_logger().error('Invalid command mode. This should never happen due to parameter validation.')
+            self.get_logger().error(f'Invalid command mode "{self.params.command_mode}". This should never happen due to parameter validation.')
 
-        if self.command_mode != CommandMode.CORR:
+        if self.params.command_mode != Mode.CORR.value:
             self.subscription_do = self.create_subscription(Bool, 'command/do', self.do_listener_callback, 10)
             self.subscription_data = self.create_subscription(Float64MultiArray, 'command/data', self.data_listener_callback, 10)
-
-        self.parameter_callback_handle = self.add_on_set_parameters_callback(self.parameter_update_callback)
 
         self.running = True
         self.initialized = False
@@ -176,6 +110,47 @@ class EGMDriver(Node):
         self.egm_thread.start()
 
         self.get_logger().info('EGM Driver is ready and running.')
+
+    def _parse_kinematic_parameters(self):
+        self.chain = kdl.Chain()
+
+        for link in self.params.dh_parameters.links:
+            theta = self.params.dh_parameters.get_entry(link).theta
+            D = self.params.dh_parameters.get_entry(link).D
+            A = self.params.dh_parameters.get_entry(link).A
+            alpha = self.params.dh_parameters.get_entry(link).alpha
+
+            if all(param == 0.0 for param in [theta, D, A, alpha]):
+                break # stop parsing if all parameters are zero, indicating no more valid links
+
+            self.get_logger().info(f'Parsed DH parameters for {link}: theta={theta}°, D={D} mm, A={A} mm, alpha={alpha}°.')
+
+            frame = kdl.Frame.DH(A, math.radians(alpha), D, math.radians(theta))
+            segment = kdl.Segment(kdl.Joint(kdl.Joint.RotZ), frame)
+            self.chain.addSegment(segment)
+
+        if self.chain.getNrOfSegments() == 0:
+            return False
+
+        self.get_logger().info(f'Total DH parameters parsed successfully. Robot model has {self.chain.getNrOfJoints()} joints.')
+
+        tcp_x = self.params.tcp_frame.x
+        tcp_y = self.params.tcp_frame.y
+        tcp_z = self.params.tcp_frame.z
+        tcp_roll = self.params.tcp_frame.roll
+        tcp_pitch = self.params.tcp_frame.pitch
+        tcp_yaw = self.params.tcp_frame.yaw
+
+        if any(param != 0.0 for param in [tcp_x, tcp_y, tcp_z, tcp_roll, tcp_pitch, tcp_yaw]):
+            self.get_logger().info(f'TCP frame provided: x={tcp_x} mm, y={tcp_y} mm, z={tcp_z} mm, roll={tcp_roll}°, pitch={tcp_pitch}°, yaw={tcp_yaw}°.')
+            tcp_rotation = kdl.Rotation.RPY(math.radians(tcp_roll), math.radians(tcp_pitch), math.radians(tcp_yaw))
+            tcp_translation = kdl.Vector(tcp_x, tcp_y, tcp_z)
+            tcp_frame = kdl.Frame(tcp_rotation, tcp_translation)
+            segment = kdl.Segment(kdl.Joint(kdl.Joint.Fixed), tcp_frame)
+            self.chain.addSegment(segment)
+
+        self.fk_solver = kdl.ChainFkSolverPos_recursive(self.chain)
+        return True
 
     def pose_listener_callback(self, msg):
         self.target_pos = [msg.position.x * 1000.0, msg.position.y * 1000.0, msg.position.z * 1000.0]
@@ -198,11 +173,11 @@ class EGMDriver(Node):
 
         path = m3.PathLine(H_base_start, H_base_end)
 
-        if self.max_acceleration > 0:
-            profile = m3.VelocityProfileTrapezoidal(self.max_velocity, self.max_acceleration)
+        if self.params.max_acceleration > 0:
+            profile = m3.VelocityProfileTrapezoidal(self.params.max_velocity, self.params.max_acceleration)
             type_str = 'trapezoidal'
         else:
-            profile = m3.VelocityProfileRectangular(self.max_velocity)
+            profile = m3.VelocityProfileRectangular(self.params.max_velocity)
             type_str = 'rectangular'
 
         profile.set_profile(0, path.path_length())
@@ -222,7 +197,23 @@ class EGMDriver(Node):
             self.get_logger().warning(f'Received joint command with incorrect number of joints. Expected {len(self.current_joint)}, got {len(msg.data)}.')
             return
 
-        self.target_joint = list(map(math.degrees, msg.data))
+        if not self.using_dh:
+            self.target_joint = list(map(math.degrees, msg.data))
+        elif len(msg.data) != self.chain.getNrOfJoints():
+            self.get_logger().warning(f'Received joint command with incorrect number of joints for DH model. Expected {self.chain.getNrOfJoints()}, got {len(msg.data)}.')
+        else:
+            q = kdl.JntArray(self.chain.getNrOfJoints())
+            H = kdl.Frame()
+
+            for i in range(len(msg.data)):
+                q[i] = msg.data[i]
+
+            self.fk_solver.JntToCart(q, H)
+            (kx, ky, kz, kw) = H.M.GetQuaternion()
+
+            self.target_pos = [H.p.x(), H.p.y(), H.p.z()]
+            self.target_orient = [kw, kx, ky, kz]
+            self.is_processing_trajectory = False
 
     def corr_listener_callback(self, msg):
         self.target_corr = [msg.x * 1000.0, msg.y * 1000.0, msg.z * 1000.0]
@@ -234,6 +225,10 @@ class EGMDriver(Node):
         self.data_out = msg.data[:DATA_LENGTH]
 
     def timer_callback(self):
+        if self.param_listener.is_old(self.params):
+            self.param_listener.refresh_dynamic_parameters()
+            self.params = self.param_listener.get_params()
+
         if self.current_joint is not None:
             joint_msg = JointState()
             joint_msg.position = list(map(math.radians, self.current_joint))
@@ -259,15 +254,15 @@ class EGMDriver(Node):
             self.publisher_data.publish(data_msg)
 
     def filter(self, current, target):
-        return current + (target - current) * self.smooth_factor
+        return current + (target - current) * self.params.smooth_factor
 
     def send_command(self, egm):
         if self.initialized and self.counter % self.divisor == 0:
-            if self.command_mode == CommandMode.JOINT:
+            if self.params.command_mode == Mode.JOINT.value:
                 axes = len(self.current_send_joint) # type: ignore
                 self.current_send_joint = [self.filter(self.current_send_joint[i], self.target_joint[i]) for i in range(axes)] # type: ignore
                 egm.send_to_robot(self.current_send_joint, rapid_to_robot=self.data_out, digital_signal_to_robot=self.send_do)
-            elif self.command_mode == CommandMode.POSE:
+            elif self.params.command_mode == Mode.POSE.value:
                 if self.is_processing_trajectory and self.trajectory is not None and self.trajectory_start_time is not None:
                     elapsed_time = (self.get_clock().now() - self.trajectory_start_time).nanoseconds * 1e-9
                     H_base_tcp = self.trajectory.position(elapsed_time)
@@ -279,26 +274,12 @@ class EGMDriver(Node):
                     self.current_send_orient = [self.filter(self.current_send_orient[i], self.target_orient[i]) for i in range(4)] # type: ignore
 
                 egm.send_to_robot_cart(self.current_send_pos, self.current_send_orient, rapid_to_robot=self.data_out, digital_signal_to_robot=self.send_do)
-            elif self.command_mode == CommandMode.CORR:
+            elif self.params.command_mode == Mode.CORR.value:
                 self.current_send_corr = [self.filter(self.current_send_corr[i], self.target_corr[i]) for i in range(3)] # type: ignore
                 egm.send_to_robot_path_corr(self.current_send_corr)
 
-    def parameter_update_callback(self, params):
-        for param in params:
-            if param.name == 'smooth_factor':
-                self.smooth_factor = param.value
-                self.get_logger().info(f'Updated smooth_factor: {self.smooth_factor}')
-            elif param.name == 'max_velocity':
-                self.max_velocity = param.value
-                self.get_logger().info(f'Updated max_velocity: {self.max_velocity} mm/s')
-            elif param.name == 'max_acceleration':
-                self.max_acceleration = param.value
-                self.get_logger().info(f'Updated max_acceleration: {self.max_acceleration} mm/s^2')
-
-        return SetParametersResult(successful=True)
-
     def run_egm_loop(self):
-        with EGM(port=self.egm_port) as egm:
+        with EGM(port=self.params.egm_port) as egm:
             self.get_logger().info('Waiting response from robot...')
 
             while self.running:

@@ -22,7 +22,7 @@ The ABB robot can be controlled in the joint or task space by publishing high-fr
 - `command/do` (std_msgs/Bool, only in **joint** and **pose** modes)
 - `command/data` (std_msgs/Float64MultiArray, only in **joint** and **pose** modes)
 
-The [rapid/](rapid) folder contains example RAPID code snippets for both command modes, which can be used as a template when implementing your own RAPID program. Use [rapid/JointCommander.modx](JointCommander.modx) for joint space control, [rapid/PoseCommander.modx](PoseCommander.modx) for task space control, and [rapid/PathCorrection.modx](PathCorrection.modx) for path correction mode.
+The [rapid/](rapid) folder contains example RAPID code snippets for both command modes, which can be used as a template when implementing your own RAPID program. Use [JointCommander.modx](rapid/JointCommander.modx) for joint space control, [PoseCommander.modx](rapid/PoseCommander.modx) for task space control, and [PathCorrection.modx](rapid/PathCorrection.modx) for path correction mode.
 
 A fourth command type is available to set a digital signal on the robot (via `command/do`), which can be used for triggering a tool, for instance. The driver will send a Boolean value together with the joint or pose command, so that they are executed simultaneously on the robot side. In order to use it, a new digital input (DI) signal must be registered in the robot configuration (I/O System > Signal), enabled in RAPID code through the `\DIFromSensor:=<name>` argument to `EGMActPose` or `EGMActJoint`, and then linked to the desired DO (I/O System > Cross Connection, then set the Resultant and Actor 1 properties accordingly).
 
@@ -47,14 +47,18 @@ The latter allows to read any custom data sent from the robot, such as the force
 The following parameters can be set when launching the driver and/or at runtime:
 
 - `egm_port` (int, default: 6510): UDP port number for EGM communication. Make sure it matches the port number configured in RobotStudio. **Read only.**
-- `smooth_factor` (double, default: 0.02): smoothing factor for the low-pass filter (exponential moving average) applied to the commanded trajectory, between 0 and 1. Lower values result in smoother trajectories, but also higher lag.
+- `smooth_factor` (double, default: 0.2): smoothing factor for the low-pass filter (exponential moving average) applied to the commanded trajectory, between 0 and 1. Lower values result in smoother trajectories, but also higher lag.
 - `publish_period` (integer, default: 10): period at which the robot state is published, in milliseconds. Zero or negative means the driver will not publish the state. **Read only.**
 - `command_mode` (string, default: "pose"): command mode, either "pose", "joint" or "corr". **Read only.**
 - `command_period` (integer, default: 24 in path correction mode, 4 otherwise): period at which the driver sends commands to the robot, in milliseconds. **Read only.**
 - `max_velocity` (double, default: 250 mm/s): maximum velocity for trajectory execution. **Pose mode only.**
 - `max_acceleration` (double, default: 200 mm/s^2): maximum acceleration for trajectory execution. If set to zero, the driver will use a rectangular velocity profile instead of a trapezoidal one. **Pose mode only.**
 
-This package also includes a simple keyboard teleoperation node that can be used to test the driver. It publishes commands in the task space, so make sure to launch the driver in pose mode.
+In order to load configuration parameters from a YAML file, you can use the following command (DH parameters for the CRB 15000-5 robot are already provided in [config/crb-15000-5.yaml](config/crb-15000-5.yaml)):
+
+```bash
+ros2 run abb_egm_driver egm_driver --ros-args --params-file <path_to_yaml_file>
+```
 
 ### Examples
 
@@ -76,18 +80,24 @@ Path correction mode:
 ros2 run abb_egm_driver egm_driver --ros-args -p command_mode:=corr
 ```
 
-All default parameters, and example keyboard-control app:
+All default parameters:
 
 ```bash
 ros2 run abb_egm_driver egm_driver --ros-args \
      -p egm_port:=6510 \
-     -p smooth_factor:=0.02 \
+     -p smooth_factor:=0.2 \
      -p publish_period:=10 \
      -p command_mode:=pose \
      -p command_period:=4 \
      -p max_velocity:=250 \
      -p max_acceleration:=200
 
+ros2 run abb_egm_driver keyboard_teleop
+```
+
+This package also includes a simple keyboard teleoperation node that can be used to test the driver. It publishes commands in the task space, so make sure to launch the driver in pose mode.
+
+```bash
 ros2 run abb_egm_driver keyboard_teleop
 ```
 
