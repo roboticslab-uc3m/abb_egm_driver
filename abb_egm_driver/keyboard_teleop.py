@@ -2,6 +2,7 @@ import copy
 import math
 import sys
 import termios
+import threading
 import tty
 import rclpy
 from rclpy.node import Node
@@ -30,7 +31,7 @@ i: print this help message
 
 ENTER: enable/disable tool
 SPACE: return to home
-CTRL-C: exit
+ESC:   exit
 """
 
 TRANSLATE_BINDINGS = {
@@ -120,80 +121,80 @@ class KeyboardCommander(Node):
         print(f'Tool {"ENABLED" if self.do_state else "DISABLED"}')
         self.do_state = not self.do_state # set for next toggle
 
+def do_key_action(node, settings):
+    while True:
+        key = getKey(settings)
+
+        if key in TRANSLATE_BINDINGS.keys():
+            dx, dy, dz = TRANSLATE_BINDINGS[key]
+            node.x += dx
+            node.y += dy
+            node.z += dz
+            node.publish_pose()
+
+        elif key in ROTATE_BINDINGS.keys():
+            drx, dry, drz = ROTATE_BINDINGS[key]
+            rot = Rotation.Quaternion(node.rx, node.ry, node.rz, node.rw)
+            rot.DoRotX(drx)
+            rot.DoRotY(dry)
+            rot.DoRotZ(drz)
+            node.rx, node.ry, node.rz, node.rw = rot.GetQuaternion()
+            node.publish_pose()
+
+        elif key == '\r': # ENTER
+            node.publish_do()
+
+        elif key == ' ':
+            node.x = HOME_X
+            node.y = HOME_Y
+            node.z = HOME_Z
+
+            node.rw = HOME_RW
+            node.rx = HOME_RX
+            node.ry = HOME_RY
+            node.rz = HOME_RZ
+
+            print("RESET TO HOME!")
+            node.publish_pose()
+
+        elif key == 'p':
+            if node.state_pose is not None:
+                p = node.state_pose.position
+                q = node.state_pose.orientation
+                print(f'Current pose: X={p.x:.2f} Y={p.y:.2f} Z={p.z:.2f} [m] || QW={q.w:.2f} QX={q.x:.2f} QY={q.y:.2f} QZ={q.z:.2f}')
+            else:
+                print('No pose state received yet.')
+
+        elif key == 'j':
+            if node.state_joint is not None:
+                joints_str = ', '.join(map('{:.2f}'.format, map(math.degrees, node.state_joint)))
+                print(f'Current joint configuration: [{joints_str}] [deg]')
+            else:
+                print('No joint state received yet.')
+
+        elif key == 'i':
+            print(help)
+
+        elif key == '\x1b': # ESC
+            rclpy.shutdown()
+            break
+
 def main():
     settings = termios.tcgetattr(sys.stdin)
     rclpy.init()
     node = KeyboardCommander()
 
+    thread = threading.Thread(target=do_key_action, args=(node, settings))
+    thread.start()
+
     try:
-        node.publish_pose()
-        node.publish_do()
-
-        while True:
-            rclpy.spin_once(node, timeout_sec=0.0)
-
-            key = getKey(settings)
-
-            if key in TRANSLATE_BINDINGS.keys():
-                dx, dy, dz = TRANSLATE_BINDINGS[key]
-                node.x += dx
-                node.y += dy
-                node.z += dz
-                node.publish_pose()
-
-            elif key in ROTATE_BINDINGS.keys():
-                drx, dry, drz = ROTATE_BINDINGS[key]
-                rot = Rotation.Quaternion(node.rx, node.ry, node.rz, node.rw)
-                rot.DoRotX(drx)
-                rot.DoRotY(dry)
-                rot.DoRotZ(drz)
-                node.rx, node.ry, node.rz, node.rw = rot.GetQuaternion()
-                node.publish_pose()
-
-            elif key == '\r':  # ENTER
-                node.publish_do()
-
-            elif key == ' ':
-                node.x = HOME_X
-                node.y = HOME_Y
-                node.z = HOME_Z
-
-                node.rw = HOME_RW
-                node.rx = HOME_RX
-                node.ry = HOME_RY
-                node.rz = HOME_RZ
-
-                print("RESET TO HOME!")
-                node.publish_pose()
-
-            elif key == 'p':
-                if node.state_pose is not None:
-                    p = node.state_pose.position
-                    q = node.state_pose.orientation
-                    print(f'Current pose: X={p.x:.2f} Y={p.y:.2f} Z={p.z:.2f} [m] || QW={q.w:.2f} QX={q.x:.2f} QY={q.y:.2f} QZ={q.z:.2f}')
-                else:
-                    print('No pose state received yet.')
-
-            elif key == 'j':
-                if node.state_joint is not None:
-                    joints_str = ', '.join(map('{:.2f}'.format, map(math.degrees, node.state_joint)))
-                    print(f'Current joint configuration: [{joints_str}] [deg]')
-                else:
-                    print('No joint state received yet.')
-
-            elif key == 'i':
-                print(help)
-
-            elif key == '\x03': # CTRL-C
-                break
-
-    except Exception as e:
-        print(e)
-
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
     finally:
+        thread.join()
         termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
         node.destroy_node()
-        rclpy.shutdown()
 
 if __name__ == '__main__':
     main()
