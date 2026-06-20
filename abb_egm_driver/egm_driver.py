@@ -86,7 +86,7 @@ class EGMDriver(Node):
             self.get_logger().info(f'Using max_velocity (trajectories): {self.params.max_velocity} mm/s.')
             self.get_logger().info(f'Using max_acceleration (trajectories): {self.params.max_acceleration} mm/s^2.')
 
-            if self._parse_dh_parameters():
+            if self._parse_kinematic_parameters():
                 self.subscription_joint_cmd = self.create_subscription(Float32MultiArray, 'command/joint', self.joint_listener_callback, 10)
                 self.using_dh = True
                 self.get_logger().info('DH parameters provided, joint commands are enabled in pose command mode.')
@@ -111,7 +111,7 @@ class EGMDriver(Node):
 
         self.get_logger().info('EGM Driver is ready and running.')
 
-    def _parse_dh_parameters(self):
+    def _parse_kinematic_parameters(self):
         self.chain = kdl.Chain()
 
         for link in self.params.dh_parameters.links:
@@ -125,16 +125,32 @@ class EGMDriver(Node):
 
             self.get_logger().info(f'Parsed DH parameters for {link}: theta={theta}°, D={D} mm, A={A} mm, alpha={alpha}°.')
 
-            H = kdl.Frame.DH(A, math.radians(alpha), D, math.radians(theta))
-            segment = kdl.Segment(kdl.Joint(kdl.Joint.RotZ), H)
+            frame = kdl.Frame.DH(A, math.radians(alpha), D, math.radians(theta))
+            segment = kdl.Segment(kdl.Joint(kdl.Joint.RotZ), frame)
             self.chain.addSegment(segment)
 
-        if self.chain.getNrOfJoints() > 0:
-            self.get_logger().info(f'Total DH parameters parsed successfully. Robot model has {self.chain.getNrOfJoints()} joints.')
-            self.fk_solver = kdl.ChainFkSolverPos_recursive(self.chain)
-            return True
+        if self.chain.getNrOfSegments() == 0:
+            return False
 
-        return False
+        self.get_logger().info(f'Total DH parameters parsed successfully. Robot model has {self.chain.getNrOfJoints()} joints.')
+
+        tcp_x = self.params.tcp_frame.x
+        tcp_y = self.params.tcp_frame.y
+        tcp_z = self.params.tcp_frame.z
+        tcp_roll = self.params.tcp_frame.roll
+        tcp_pitch = self.params.tcp_frame.pitch
+        tcp_yaw = self.params.tcp_frame.yaw
+
+        if any(param != 0.0 for param in [tcp_x, tcp_y, tcp_z, tcp_roll, tcp_pitch, tcp_yaw]):
+            self.get_logger().info(f'TCP frame provided: x={tcp_x} mm, y={tcp_y} mm, z={tcp_z} mm, roll={tcp_roll}°, pitch={tcp_pitch}°, yaw={tcp_yaw}°.')
+            tcp_rotation = kdl.Rotation.RPY(math.radians(tcp_roll), math.radians(tcp_pitch), math.radians(tcp_yaw))
+            tcp_translation = kdl.Vector(tcp_x, tcp_y, tcp_z)
+            tcp_frame = kdl.Frame(tcp_rotation, tcp_translation)
+            segment = kdl.Segment(kdl.Joint(kdl.Joint.Fixed), tcp_frame)
+            self.chain.addSegment(segment)
+
+        self.fk_solver = kdl.ChainFkSolverPos_recursive(self.chain)
+        return True
 
     def pose_listener_callback(self, msg):
         self.target_pos = [msg.position.x * 1000.0, msg.position.y * 1000.0, msg.position.z * 1000.0]

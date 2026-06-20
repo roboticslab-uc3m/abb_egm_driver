@@ -75,3 +75,34 @@ egm_driver:
         default_value: 0.0
         description: "DH parameter alpha"
         read_only: true
+  tcp_frame:
+    x:
+      type: double
+      default_value: 0.0
+      description: "TCP frame X offset (in mm)"
+      read_only: true
+    y:
+      type: double
+      default_value: 0.0
+      description: "TCP frame Y offset (in mm)"
+      read_only: true
+    z:
+      type: double
+      default_value: 0.0
+      description: "TCP frame Z offset (in mm)"
+      read_only: true
+    roll:
+      type: double
+      default_value: 0.0
+      description: "TCP frame roll offset (in degrees)"
+      read_only: true
+    pitch:
+      type: double
+      default_value: 0.0
+      description: "TCP frame pitch offset (in degrees)"
+      read_only: true
+    yaw:
+      type: double
+      default_value: 0.0
+      description: "TCP frame yaw offset (in degrees)"
+      read_only: true
