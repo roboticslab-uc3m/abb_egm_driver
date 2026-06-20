@@ -73,6 +73,7 @@ class KeyboardCommander(Node):
 
         self.pose_publisher = self.create_publisher(Pose, 'command/pose', 10)
         self.do_publisher = self.create_publisher(Bool, 'command/do', 10)
+        self.trajectory_publisher = self.create_publisher(Pose, 'trajectory/pose', 10)
 
         self.pose_callback = self.create_subscription(Pose, 'state/pose', self.pose_listener_callback, 10)
         self.joint_callback = self.create_subscription(JointState, 'state/joint', self.joint_listener_callback, 10)
@@ -80,14 +81,14 @@ class KeyboardCommander(Node):
         self.state_pose = None
         self.state_joint = None
 
-        self.x = HOME_X
-        self.y = HOME_Y
-        self.z = HOME_Z
+        self.x = None
+        self.y = None
+        self.z = None
 
-        self.rw = HOME_RW
-        self.rx = HOME_RX
-        self.ry = HOME_RY
-        self.rz = HOME_RZ
+        self.rw = None
+        self.rx = None
+        self.ry = None
+        self.rz = None
 
         self.do_state = False
 
@@ -125,6 +126,21 @@ class KeyboardCommander(Node):
         print(f'Tool {"ENABLED" if self.do_state else "DISABLED"}')
         self.do_state = not self.do_state # set for next toggle
 
+    def publish_home(self):
+        pose = Pose()
+
+        pose.position.x = self.x = HOME_X
+        pose.position.y = self.y = HOME_Y
+        pose.position.z = self.z = HOME_Z
+
+        pose.orientation.w = self.rw = HOME_RW
+        pose.orientation.x = self.rx = HOME_RX
+        pose.orientation.y = self.ry = HOME_RY
+        pose.orientation.z = self.rz = HOME_RZ
+
+        self.trajectory_publisher.publish(pose)
+        print("RESET TO HOME!")
+
 def do_key_action(node, settings):
     while True:
         key = getKey(settings)
@@ -149,17 +165,7 @@ def do_key_action(node, settings):
             node.publish_do()
 
         elif key == ' ':
-            node.x = HOME_X
-            node.y = HOME_Y
-            node.z = HOME_Z
-
-            node.rw = HOME_RW
-            node.rx = HOME_RX
-            node.ry = HOME_RY
-            node.rz = HOME_RZ
-
-            print("RESET TO HOME!")
-            node.publish_pose()
+            node.publish_home()
 
         elif key == 'p':
             if node.state_pose is not None:
@@ -197,11 +203,14 @@ def main():
                 node.x = node.state_pose.position.x
                 node.y = node.state_pose.position.y
                 node.z = node.state_pose.position.z
+
                 node.rw = node.state_pose.orientation.w
                 node.rx = node.state_pose.orientation.x
                 node.ry = node.state_pose.orientation.y
                 node.rz = node.state_pose.orientation.z
+
                 node.initialized = True
+
                 print('Initial pose and joint state received. You can now control the robot.')
 
         thread = threading.Thread(target=do_key_action, args=(node, settings))
