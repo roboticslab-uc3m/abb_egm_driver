@@ -194,6 +194,13 @@ def main():
             rclpy.spin_once(node, timeout_sec=0.1)
 
             if node.state_pose is not None and node.state_joint is not None:
+                node.x = node.state_pose.position.x
+                node.y = node.state_pose.position.y
+                node.z = node.state_pose.position.z
+                node.rw = node.state_pose.orientation.w
+                node.rx = node.state_pose.orientation.x
+                node.ry = node.state_pose.orientation.y
+                node.rz = node.state_pose.orientation.z
                 node.initialized = True
                 print('Initial pose and joint state received. You can now control the robot.')
 
