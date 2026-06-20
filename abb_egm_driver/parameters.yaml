@@ -34,17 +34,31 @@ egm_driver:
     read_only: true
     validation:
       bounds<>: [1, 1000]
-  max_velocity:
+  max_lin_velocity:
     type: double
     default_value: 250.0
-    description: "Maximum velocity for trajectory generation (in mm/s)"
+    description: "Maximum linear velocity for trajectory generation (in mm/s)"
     read_only: false
     validation:
       gt<>: [0.0]
-  max_acceleration:
+  max_lin_acceleration:
     type: double
     default_value: 200.0
-    description: "Maximum acceleration for trajectory generation (in mm/s^2)"
+    description: "Maximum linear acceleration for trajectory generation (in mm/s^2)"
+    read_only: false
+    validation:
+      gt<>: [0.0]
+  max_joint_velocity:
+    type: double
+    default_value: 25.0
+    description: "Maximum joint velocity for trajectory generation (in deg/s)"
+    read_only: false
+    validation:
+      gt<>: [0.0]
+  max_joint_acceleration:
+    type: double
+    default_value: 10.0
+    description: "Maximum joint acceleration for trajectory generation (in deg/s^2)"
     read_only: false
     validation:
       gt<>: [0.0]
