@@ -47,7 +47,7 @@ egm_driver:
     description: "Maximum linear acceleration for trajectory generation (in mm/s^2)"
     read_only: false
     validation:
-      gt<>: [0.0]
+      gt_eq<>: [0.0]
   max_joint_velocity:
     type: double
     default_value: 25.0
@@ -61,7 +61,7 @@ egm_driver:
     description: "Maximum joint acceleration for trajectory generation (in deg/s^2)"
     read_only: false
     validation:
-      gt<>: [0.0]
+      gt_eq<>: [0.0]
   dh_parameters:
     links:
       type: string_array
