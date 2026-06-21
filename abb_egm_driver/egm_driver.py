@@ -78,11 +78,11 @@ class EGMDriver(Node):
 
         self.divisor = self.params.command_period / EGM_PERIOD
         self.counter = 0
-        self.using_dh = False
+        self.using_dh_joint_cmd = False
 
         if self.params.command_mode == Mode.POSE.value:
             self.subscription_pose_cmd = self.create_subscription(Pose, 'command/pose', self.pose_listener_callback, 10)
-            self.subscription_traj_pose = self.create_subscription(Pose, 'trajectory/pose', self.trajectory_pose_listener_callback, 10)
+            self.subscription_traj_movel = self.create_subscription(Pose, 'trajectory/movel', self.trajectory_movel_listener_callback, 10)
 
             self.get_logger().info(f'Using max_lin_velocity (trajectories): {self.params.max_lin_velocity} mm/s.')
             self.get_logger().info(f'Using max_lin_acceleration (trajectories): {self.params.max_lin_acceleration} mm/s^2.')
@@ -90,11 +90,12 @@ class EGMDriver(Node):
             if self._parse_kinematic_parameters():
                 self.subscription_joint_cmd = self.create_subscription(Float32MultiArray, 'command/joint', self.joint_listener_callback, 10)
                 self.subscription_traj_joint = self.create_subscription(Float32MultiArray, 'trajectory/joint', self.trajectory_joint_listener_callback, 10)
+                self.subscription_traj_movej = self.create_subscription(Pose, 'trajectory/movej', self.trajectory_movej_listener_callback, 10)
 
                 self.get_logger().info(f'Using max_joint_velocity (trajectories): {self.params.max_joint_velocity} deg/s.')
                 self.get_logger().info(f'Using max_joint_acceleration (trajectories): {self.params.max_joint_acceleration} deg/s^2.')
 
-                self.using_dh = True
+                self.using_dh_joint_cmd = True
                 self.get_logger().info('DH parameters provided, joint commands are enabled in pose command mode.')
             else:
                 self.get_logger().info('No valid DH parameters provided, joint commands are disabled in pose command mode.')
@@ -104,6 +105,9 @@ class EGMDriver(Node):
 
             self.get_logger().info(f'Using max_joint_velocity (trajectories): {self.params.max_joint_velocity} deg/s.')
             self.get_logger().info(f'Using max_joint_acceleration (trajectories): {self.params.max_joint_acceleration} deg/s^2.')
+
+            if self._parse_kinematic_parameters():
+                self.subscription_traj_movej = self.create_subscription(Pose, 'trajectory/movej', self.trajectory_movej_listener_callback, 10)
         elif self.params.command_mode == Mode.CORR.value:
             self.subscription_corr_cmd = self.create_subscription(Point, 'command/path_corr', self.corr_listener_callback, 10)
         else:
@@ -124,7 +128,10 @@ class EGMDriver(Node):
     def _parse_kinematic_parameters(self):
         self.chain = kdl.Chain()
 
-        for link in self.params.dh_parameters.links:
+        self.min_limits = kdl.JntArray(len(self.params.dh_parameters.links))
+        self.max_limits = kdl.JntArray(len(self.params.dh_parameters.links))
+
+        for i, link in enumerate(self.params.dh_parameters.links):
             theta = self.params.dh_parameters.get_entry(link).theta
             D = self.params.dh_parameters.get_entry(link).D
             A = self.params.dh_parameters.get_entry(link).A
@@ -133,7 +140,13 @@ class EGMDriver(Node):
             if all(param == 0.0 for param in [theta, D, A, alpha]):
                 break # stop parsing if all parameters are zero, indicating no more valid links
 
-            self.get_logger().info(f'Parsed DH parameters for {link}: theta={theta}°, D={D} mm, A={A} mm, alpha={alpha}°.')
+            min_limit = self.params.dh_parameters.get_entry(link).min_limit
+            max_limit = self.params.dh_parameters.get_entry(link).max_limit
+
+            self.min_limits[i] = math.radians(min_limit)
+            self.max_limits[i] = math.radians(max_limit)
+
+            self.get_logger().info(f'Parsed DH parameters for {link}: theta={theta}°, D={D} mm, A={A} mm, alpha={alpha}°. Limits: min={min_limit}°, max={max_limit}°.')
 
             frame = kdl.Frame.DH(A, math.radians(alpha), D, math.radians(theta))
             segment = kdl.Segment(kdl.Joint(kdl.Joint.RotZ), frame)
@@ -141,6 +154,9 @@ class EGMDriver(Node):
 
         if self.chain.getNrOfSegments() == 0:
             return False
+
+        self.min_limits.resize(self.chain.getNrOfJoints())
+        self.max_limits.resize(self.chain.getNrOfJoints())
 
         self.get_logger().info(f'Total DH parameters parsed successfully. Robot model has {self.chain.getNrOfJoints()} joints.')
 
@@ -160,17 +176,20 @@ class EGMDriver(Node):
             segment = kdl.Segment(kdl.Joint(kdl.Joint.Fixed), tcp_frame)
             self.chain.addSegment(segment)
 
-        self.fk_solver = kdl.ChainFkSolverPos_recursive(self.chain)
+        self.fk_solver_pos = kdl.ChainFkSolverPos_recursive(self.chain)
+        self.ik_solver_vel = kdl.ChainIkSolverVel_pinv(self.chain)
+        self.ik_solver_pos = kdl.ChainIkSolverPos_NR_JL(self.chain, self.min_limits, self.max_limits, self.fk_solver_pos, self.ik_solver_vel)
+
         return True
 
-    def _solve_fk(self, joint_angles):
+    def _solve_fk(self, joint_angles_rad):
         q = kdl.JntArray(self.chain.getNrOfJoints())
         H = kdl.Frame()
 
-        for i in range(len(joint_angles)):
-            q[i] = joint_angles[i]
+        for i in range(len(joint_angles_rad)):
+            q[i] = joint_angles_rad[i]
 
-        self.fk_solver.JntToCart(q, H)
+        self.fk_solver_pos.JntToCart(q, H)
         (kx, ky, kz, kw) = H.M.GetQuaternion()
 
         pos = [H.p.x(), H.p.y(), H.p.z()]
@@ -183,7 +202,7 @@ class EGMDriver(Node):
         self.target_orient = [msg.orientation.w, msg.orientation.x, msg.orientation.y, msg.orientation.z]
         self.processing_trajectory = None
 
-    def trajectory_pose_listener_callback(self, msg):
+    def trajectory_movel_listener_callback(self, msg):
         if self.current_pos is None or self.current_orient is None:
             self.get_logger().warning('Received linear trajectory command before robot state is available. Ignoring command.')
             return
@@ -212,7 +231,30 @@ class EGMDriver(Node):
         self.trajectory_start_time = self.get_clock().now()
         self.processing_trajectory = 'lin'
 
-        self.get_logger().info(f'Executing {type_str} linear trajectory. Duration: {self.lin_trajectory.duration():.2f} seconds, path length: {path.path_length():.2f} mm.')
+        self.get_logger().info(f'Executing {type_str} linear trajectory. Duration: {self.lin_trajectory.duration():.2f} s, path length: {path.path_length():.2f} mm.')
+
+    def trajectory_movej_listener_callback(self, msg):
+        if self.current_joint is None:
+            self.get_logger().warning('Received joint command before robot state is available. Ignoring command.')
+            return
+
+        q = kdl.JntArray(self.chain.getNrOfJoints())
+        qd = kdl.JntArray(self.chain.getNrOfJoints())
+
+        for i in range(len(self.current_joint)):
+            q[i] = math.radians(self.current_joint[i])
+
+        xd = kdl.Frame(kdl.Rotation.Quaternion(msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w),
+                       kdl.Vector(msg.position.x * 1000.0, msg.position.y * 1000.0, msg.position.z * 1000.0))
+
+        if self.ik_solver_pos.CartToJnt(q, xd, qd) >= 0:
+            qd_deg_str = ', '.join([f'{math.degrees(qd[i]):.2f}' for i in range(qd.rows())])
+            self.get_logger().info(f'IK solution found: [{qd_deg_str}] [deg]')
+            msg = Float32MultiArray()
+            msg.data = [qd[i] for i in range(qd.rows())]
+            self.trajectory_joint_listener_callback(msg)
+        else:
+            self.get_logger().warning('Inverse kinematics failed for the given target pose. Ignoring command.')
 
     def joint_listener_callback(self, msg):
         if self.current_joint is None:
@@ -223,7 +265,7 @@ class EGMDriver(Node):
             self.get_logger().warning(f'Received joint command with incorrect number of joints. Expected {len(self.current_joint)}, got {len(msg.data)}.')
             return
 
-        if not self.using_dh:
+        if not self.using_dh_joint_cmd:
             self.target_joint = list(map(math.degrees, msg.data))
         elif len(msg.data) != self.chain.getNrOfJoints():
             self.get_logger().warning(f'Received joint command with incorrect number of joints for DH model. Expected {self.chain.getNrOfJoints()}, got {len(msg.data)}.')
@@ -265,7 +307,7 @@ class EGMDriver(Node):
         self.trajectory_start_time = self.get_clock().now()
         self.processing_trajectory = 'joint'
 
-        self.get_logger().info(f'Executing {type_str} joint trajectory. Duration: {duration:.2f} seconds, max joint distance: {max_distance:.2f} degrees.')
+        self.get_logger().info(f'Executing {type_str} joint trajectory. Duration: {duration:.2f} s, max joint distance: {max_distance:.2f} deg.')
 
     def corr_listener_callback(self, msg):
         self.target_corr = [msg.x * 1000.0, msg.y * 1000.0, msg.z * 1000.0]

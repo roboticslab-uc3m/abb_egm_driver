@@ -7,31 +7,43 @@ abb_egm_driver:
         D: 265.0
         A: 0.0
         alpha: -90.0
+        min_limit: -180.0
+        max_limit: 180.0
       link_2:
         theta: -90.0
         D: 0.0
         A: 444.0
         alpha: 0.0
+        min_limit: -180.0
+        max_limit: 180.0
       link_3:
         theta: 0.0
         D: 0.0
         A: 110.0
         alpha: -90.0
+        min_limit: -225.0
+        max_limit: 85.0
       link_4:
         theta: 0.0
         D: 470.0
         A: 0.0
         alpha: 90.0
+        min_limit: -180.0
+        max_limit: 180.0
       link_5:
         theta: 0.0
         D: 0.0
         A: 80.0
         alpha: -90.0
+        min_limit: -180.0
+        max_limit: 180.0
       link_6:
         theta: 180.0
         D: 101.0
         A: 0.0
         alpha: 0.0
+        min_limit: -270.0
+        max_limit: 270.0
     tcp_frame:
       x: 0.0
       y: 0.0

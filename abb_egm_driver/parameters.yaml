@@ -89,6 +89,16 @@ egm_driver:
         default_value: 0.0
         description: "DH parameter alpha"
         read_only: true
+      min_limit:
+        type: double
+        default_value: -180.0
+        description: "Minimum joint limit (in degrees)"
+        read_only: true
+      max_limit:
+        type: double
+        default_value: 180.0
+        description: "Maximum joint limit (in degrees)"
+        read_only: true
   tcp_frame:
     x:
       type: double

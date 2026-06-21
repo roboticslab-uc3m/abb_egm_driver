@@ -73,7 +73,7 @@ class KeyboardCommander(Node):
 
         self.pose_publisher = self.create_publisher(Pose, 'command/pose', 10)
         self.do_publisher = self.create_publisher(Bool, 'command/do', 10)
-        self.trajectory_publisher = self.create_publisher(Pose, 'trajectory/pose', 10)
+        self.trajectory_publisher = self.create_publisher(Pose, 'trajectory/movel', 10)
 
         self.pose_callback = self.create_subscription(Pose, 'state/pose', self.pose_listener_callback, 10)
         self.joint_callback = self.create_subscription(JointState, 'state/joint', self.joint_listener_callback, 10)
