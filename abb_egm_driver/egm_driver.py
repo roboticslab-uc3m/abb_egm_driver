@@ -4,7 +4,7 @@ from rclpy.node import Node
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
-from geometry_msgs.msg import Point, Pose
+from geometry_msgs.msg import Point, Pose, PoseStamped
 from std_msgs.msg import Float32MultiArray, Float64MultiArray
 from std_srvs.srv import Trigger
 from sensor_msgs.msg import JointState
@@ -41,6 +41,8 @@ class EGMDriver(Node):
 
         self.param_listener = egm_driver.ParamListener(self)
         self.params = self.param_listener.get_params()
+
+        self.state_timestamp = None
 
         self.current_joint = None
         self.current_pos = None
@@ -79,7 +81,7 @@ class EGMDriver(Node):
         self.get_logger().info(f'Using publish_period: {self.params.publish_period} ms.')
 
         self.publisher_joint = self.create_publisher(JointState, 'state/joint', 10)
-        self.publisher_pose = self.create_publisher(Pose, 'state/pose', 10)
+        self.publisher_pose = self.create_publisher(PoseStamped, 'state/pose', 10)
 
         self.timer = self.create_timer(self.params.publish_period * 0.001, self.timer_callback)
 
@@ -530,16 +532,19 @@ class EGMDriver(Node):
             self.publisher_joint.publish(joint_msg)
 
         if self.current_pos is not None and self.current_orient is not None:
-            pose_msg = Pose()
+            pose_msg = PoseStamped()
 
-            pose_msg.position.x = self.current_pos[0] / 1000.0
-            pose_msg.position.y = self.current_pos[1] / 1000.0
-            pose_msg.position.z = self.current_pos[2] / 1000.0
+            pose_msg.header.stamp.sec = self.state_timestamp.seconds
+            pose_msg.header.stamp.nanosec = self.state_timestamp.nanoseconds
 
-            pose_msg.orientation.w = self.current_orient[0]
-            pose_msg.orientation.x = self.current_orient[1]
-            pose_msg.orientation.y = self.current_orient[2]
-            pose_msg.orientation.z = self.current_orient[3]
+            pose_msg.pose.position.x = self.current_pos[0] / 1000.0
+            pose_msg.pose.position.y = self.current_pos[1] / 1000.0
+            pose_msg.pose.position.z = self.current_pos[2] / 1000.0
+
+            pose_msg.pose.orientation.w = self.current_orient[0]
+            pose_msg.pose.orientation.x = self.current_orient[1]
+            pose_msg.pose.orientation.y = self.current_orient[2]
+            pose_msg.pose.orientation.z = self.current_orient[3]
 
             self.publisher_pose.publish(pose_msg)
 
@@ -634,6 +639,8 @@ class EGMDriver(Node):
                 if not success or state is None or state.cartesian is None:
                     self.get_logger().warning('Failed to receive robot state. Retrying...')
                     continue
+
+                self.state_timestamp = state.timestamp
 
                 self.current_joint = state.joint_angles.tolist() # clone list to avoid reference issues
                 self.current_pos = [state.cartesian.pos.x, state.cartesian.pos.y, state.cartesian.pos.z]

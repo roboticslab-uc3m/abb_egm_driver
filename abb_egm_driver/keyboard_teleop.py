@@ -7,7 +7,7 @@ import tty
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
-from geometry_msgs.msg import Pose
+from geometry_msgs.msg import Pose, PoseStamped
 from sensor_msgs.msg import JointState
 from rl_cartesian_control_msgs.srv import Act
 from rl_cartesian_control_msgs.action import PoseTrajectory
@@ -77,7 +77,7 @@ class KeyboardCommander(Node):
         self.act_client = self.create_client(Act, 'actuate_tool')
         self.trajectory_client = ActionClient(self, PoseTrajectory, 'trajectory/pose')
 
-        self.pose_callback = self.create_subscription(Pose, 'state/pose', self.pose_listener_callback, 10)
+        self.pose_callback = self.create_subscription(PoseStamped, 'state/pose', self.pose_listener_callback, 10)
         self.joint_callback = self.create_subscription(JointState, 'state/joint', self.joint_listener_callback, 10)
 
         self.state_pose = None
@@ -101,7 +101,7 @@ class KeyboardCommander(Node):
         print('Waiting for initial pose and joint state...')
 
     def pose_listener_callback(self, msg):
-        self.state_pose = copy.copy(msg)
+        self.state_pose = copy.copy(msg.pose)
 
     def joint_listener_callback(self, msg):
         self.state_joint = list(msg.position)
