@@ -75,11 +75,11 @@ class EGMDriver(Node):
 
         self.get_logger().info(f'Using EGM port: {self.params.egm_port}.')
         self.get_logger().info(f'Using smooth_factor: {self.params.smooth_factor}.')
-
         self.get_logger().info(f'Using publish_period: {self.params.publish_period} ms.')
+
         self.publisher_joint = self.create_publisher(JointState, 'state/joint', 10)
         self.publisher_pose = self.create_publisher(Pose, 'state/pose', 10)
-        self.publisher_data = self.create_publisher(Float64MultiArray, 'state/data', 10)
+
         self.timer = self.create_timer(self.params.publish_period * 0.001, self.timer_callback)
 
         self.get_logger().info(f'Using command_mode: {self.params.command_mode}.')
@@ -96,7 +96,11 @@ class EGMDriver(Node):
         self.using_dh_joint_cmd = False
 
         if self.params.command_mode == Mode.POSE.value:
+            self.publisher_data = self.create_publisher(Float64MultiArray, 'state/data', 10)
+
             self.subscription_pose_cmd = self.create_subscription(Pose, 'command/pose', self.pose_listener_callback, 10)
+            self.subscription_data = self.create_subscription(Float64MultiArray, 'command/data', self.data_listener_callback, 10)
+
             self.act_service = self.create_service(Act, 'act', self.act_service_callback)
 
             self.action_pose_traj = ActionServer(self, PoseTrajectory, 'trajectory/pose',
@@ -157,9 +161,6 @@ class EGMDriver(Node):
             self.subscription_corr_cmd = self.create_subscription(Point, 'command/path_corr', self.corr_listener_callback, 10)
         else:
             self.get_logger().error(f'Invalid command mode "{self.params.command_mode}". This should never happen due to parameter validation.')
-
-        if self.params.command_mode != Mode.CORR.value:
-            self.subscription_data = self.create_subscription(Float64MultiArray, 'command/data', self.data_listener_callback, 10)
 
         self.running = True
         self.initialized = False
