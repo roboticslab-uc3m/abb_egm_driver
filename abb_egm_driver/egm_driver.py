@@ -177,6 +177,23 @@ class EGMDriver(Node):
     def parse_kinematic_parameters(self):
         self.chain = kdl.Chain()
 
+        wobj_x = self.params.wobj_frame.x
+        wobj_y = self.params.wobj_frame.y
+        wobj_z = self.params.wobj_frame.z
+
+        wobj_qw = self.params.wobj_frame.qw
+        wobj_qx = self.params.wobj_frame.qx
+        wobj_qy = self.params.wobj_frame.qy
+        wobj_qz = self.params.wobj_frame.qz
+
+        if any(param != 0.0 for param in [wobj_x, wobj_y, wobj_z, wobj_qx, wobj_qy, wobj_qz]):
+            self.get_logger().info(f'Work object frame provided: x={wobj_x} mm, y={wobj_y} mm, z={wobj_z} mm, qw={wobj_qw}, qx={wobj_qx}, qy={wobj_qy}, qz={wobj_qz}.')
+            wobj_rotation = kdl.Rotation.Quaternion(wobj_qx, wobj_qy, wobj_qz, wobj_qw)
+            wobj_translation = kdl.Vector(wobj_x, wobj_y, wobj_z)
+            wobj_frame = kdl.Frame(wobj_rotation, wobj_translation)
+            segment = kdl.Segment(kdl.Joint(kdl.Joint.Fixed), wobj_frame.Inverse())
+            self.chain.addSegment(segment)
+
         self.min_limits = kdl.JntArray(len(self.params.dh_parameters.links))
         self.max_limits = kdl.JntArray(len(self.params.dh_parameters.links))
 
