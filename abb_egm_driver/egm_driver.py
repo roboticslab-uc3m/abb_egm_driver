@@ -1,10 +1,16 @@
 import rclpy
+
 from rclpy.node import Node
+from rclpy.action import ActionServer, CancelResponse, GoalResponse
+from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
+from rclpy.callback_groups import ReentrantCallbackGroup
 from geometry_msgs.msg import Point, Pose
 from std_msgs.msg import Float32MultiArray, Float64MultiArray, Bool
 from sensor_msgs.msg import JointState
+from rl_cartesian_control_msgs.action import Trajectory
 from ABBRobotEGM import EGM
 from enum import Enum
+
 import math
 import threading
 import PyKDL as kdl
@@ -57,6 +63,13 @@ class EGMDriver(Node):
         self.joint_profiles = None
         self.processing_trajectory = None
         self.trajectory_start_time = None
+        self.trajectory_duration = None
+        self.trajectory_progress = 1.0
+
+        self.has_kinematics = False
+        self.goal_handle = None
+        self.goal_lock = threading.Lock()
+        self.trajectory_done_event = threading.Event()
 
         self.get_logger().info(f'Using EGM port: {self.params.egm_port}.')
         self.get_logger().info(f'Using smooth_factor: {self.params.smooth_factor}.')
@@ -82,32 +95,60 @@ class EGMDriver(Node):
 
         if self.params.command_mode == Mode.POSE.value:
             self.subscription_pose_cmd = self.create_subscription(Pose, 'command/pose', self.pose_listener_callback, 10)
-            self.subscription_traj_movel = self.create_subscription(Pose, 'trajectory/movel', self.trajectory_movel_listener_callback, 10)
+
+            self.action_server_traj = ActionServer(self, Trajectory, 'trajectory',
+                                                   goal_callback=self.trajectory_goal_callback_pose,
+                                                   handle_accepted_callback=self.trajectory_handle_accepted_callback,
+                                                   cancel_callback=self.trajectory_cancel_callback,
+                                                   execute_callback=self.trajectory_execute_callback_pose,
+                                                   callback_group=ReentrantCallbackGroup())
 
             self.get_logger().info(f'Using max_lin_velocity (trajectories): {self.params.max_lin_velocity} mm/s.')
             self.get_logger().info(f'Using max_lin_acceleration (trajectories): {self.params.max_lin_acceleration} mm/s^2.')
 
-            if self._parse_kinematic_parameters():
+            if self.parse_kinematic_parameters():
                 self.subscription_joint_cmd = self.create_subscription(Float32MultiArray, 'command/joint', self.joint_listener_callback, 10)
-                self.subscription_traj_joint = self.create_subscription(Float32MultiArray, 'trajectory/joint', self.trajectory_joint_listener_callback, 10)
-                self.subscription_traj_movej = self.create_subscription(Pose, 'trajectory/movej', self.trajectory_movej_listener_callback, 10)
+
+                # self.action_server_traj = ActionServer(self, Trajectory, 'trajectory',
+                #                                        goal_callback=self.trajectory_goal_callback_joint,
+                #                                        handle_accepted_callback=self.trajectory_handle_accepted_callback,
+                #                                        cancel_callback=self.trajectory_cancel_callback,
+                #                                        execute_callback=self.trajectory_execute_callback_joint,
+                #                                        callback_group=ReentrantCallbackGroup())
 
                 self.get_logger().info(f'Using max_joint_velocity (trajectories): {self.params.max_joint_velocity} deg/s.')
                 self.get_logger().info(f'Using max_joint_acceleration (trajectories): {self.params.max_joint_acceleration} deg/s^2.')
 
                 self.using_dh_joint_cmd = True
+                self.has_kinematics = True
                 self.get_logger().info('DH parameters provided, joint commands are enabled in pose command mode.')
             else:
                 self.get_logger().info('No valid DH parameters provided, joint commands are disabled in pose command mode.')
         elif self.params.command_mode == Mode.JOINT.value:
             self.subscription_joint_cmd = self.create_subscription(Float32MultiArray, 'command/joint', self.joint_listener_callback, 10)
-            self.subscription_traj_joint = self.create_subscription(Float32MultiArray, 'trajectory/joint', self.trajectory_joint_listener_callback, 10)
+
+            # self.action_server_traj = ActionServer(self, Trajectory, 'trajectory',
+            #                                        goal_callback=self.trajectory_goal_callback_joint,
+            #                                        handle_accepted_callback=self.trajectory_handle_accepted_callback,
+            #                                        cancel_callback=self.trajectory_cancel_callback,
+            #                                        execute_callback=self.trajectory_execute_callback_joint,
+            #                                        callback_group=ReentrantCallbackGroup())
 
             self.get_logger().info(f'Using max_joint_velocity (trajectories): {self.params.max_joint_velocity} deg/s.')
             self.get_logger().info(f'Using max_joint_acceleration (trajectories): {self.params.max_joint_acceleration} deg/s^2.')
 
-            if self._parse_kinematic_parameters():
-                self.subscription_traj_movej = self.create_subscription(Pose, 'trajectory/movej', self.trajectory_movej_listener_callback, 10)
+            if self.parse_kinematic_parameters():
+                self.action_server_traj = ActionServer(self, Trajectory, 'trajectory',
+                                                       goal_callback=self.trajectory_goal_callback_pose,
+                                                       handle_accepted_callback=self.trajectory_handle_accepted_callback,
+                                                       cancel_callback=self.trajectory_cancel_callback,
+                                                       execute_callback=self.trajectory_execute_callback_pose,
+                                                       callback_group=ReentrantCallbackGroup())
+
+                self.has_kinematics = True
+                self.get_logger().info('DH parameters provided, pose commands are enabled in joint command mode.')
+            else:
+                self.get_logger().info('No valid DH parameters provided, pose commands are disabled in joint command mode.')
         elif self.params.command_mode == Mode.CORR.value:
             self.subscription_corr_cmd = self.create_subscription(Point, 'command/path_corr', self.corr_listener_callback, 10)
         else:
@@ -125,7 +166,7 @@ class EGMDriver(Node):
 
         self.get_logger().info('EGM Driver is ready and running.')
 
-    def _parse_kinematic_parameters(self):
+    def parse_kinematic_parameters(self):
         self.chain = kdl.Chain()
 
         self.min_limits = kdl.JntArray(len(self.params.dh_parameters.links))
@@ -182,7 +223,7 @@ class EGMDriver(Node):
 
         return True
 
-    def _solve_fk(self, joint_angles_rad):
+    def solve_fk(self, joint_angles_rad):
         q = kdl.JntArray(self.chain.getNrOfJoints())
         H = kdl.Frame()
 
@@ -202,16 +243,182 @@ class EGMDriver(Node):
         self.target_orient = [msg.orientation.w, msg.orientation.x, msg.orientation.y, msg.orientation.z]
         self.processing_trajectory = None
 
-    def trajectory_movel_listener_callback(self, msg):
-        if self.current_pos is None or self.current_orient is None:
-            self.get_logger().warning('Received linear trajectory command before robot state is available. Ignoring command.')
+    def joint_listener_callback(self, msg):
+        if self.current_joint is None:
+            self.get_logger().warning('Received joint command before robot state is available. Ignoring command.')
             return
 
+        if len(msg.data) != len(self.current_joint):
+            self.get_logger().warning(f'Received joint command with incorrect number of joints. Expected {len(self.current_joint)}, got {len(msg.data)}.')
+            return
+
+        if not self.using_dh_joint_cmd:
+            self.target_joint = list(map(math.degrees, msg.data))
+        elif len(msg.data) != self.chain.getNrOfJoints():
+            self.get_logger().warning(f'Received joint command with incorrect number of joints for DH model. Expected {self.chain.getNrOfJoints()}, got {len(msg.data)}.')
+        else:
+            self.target_pos, self.target_orient = self.solve_fk(msg.data)
+            self.processing_trajectory = None
+
+    def corr_listener_callback(self, msg):
+        self.target_corr = [msg.x * 1000.0, msg.y * 1000.0, msg.z * 1000.0]
+
+    def do_listener_callback(self, msg):
+        self.send_do = msg.data
+
+    def data_listener_callback(self, msg):
+        self.data_out = msg.data[:DATA_LENGTH]
+
+    def trajectory_goal_callback_joint(self, goal_request):
+        self.get_logger().info('Received joint trajectory goal request')
+
+        if self.current_joint is None:
+            self.get_logger().warning('Received joint trajectory before robot state is available. Ignoring command.')
+            return GoalResponse.REJECT
+
+        if len(goal_request.data) != len(self.current_joint):
+            self.get_logger().warning(f'Received joint trajectory with incorrect number of joints. Expected {len(self.current_joint)}, got {len(goal_request.data)}.')
+            return GoalResponse.REJECT
+
+        if len(goal_request.data) != self.chain.getNrOfJoints():
+            self.get_logger().warning(f'Received joint trajectory with incorrect number of joints for DH model. Expected {self.chain.getNrOfJoints()}, got {len(goal_request.data)}.')
+            return GoalResponse.REJECT
+
+        return GoalResponse.ACCEPT
+
+    def trajectory_goal_callback_pose(self, goal_request):
+        self.get_logger().info('Received pose trajectory goal request')
+
+        if goal_request.type == Trajectory.Goal.JOINT:
+            if not self.has_kinematics:
+                self.get_logger().warning('Received MoveJ trajectory but no valid DH parameters are provided. Ignoring command.')
+                return GoalResponse.REJECT
+
+            if self.current_joint is None:
+                self.get_logger().warning('Received MoveJ trajectory before robot state is available. Ignoring command.')
+                return GoalResponse.REJECT
+        elif goal_request.type == Trajectory.Goal.LINEAR:
+            if self.current_pos is None or self.current_orient is None:
+                self.get_logger().warning('Received MoveL trajectory before robot state is available. Ignoring command.')
+                return GoalResponse.REJECT
+        else:
+            self.get_logger().warning('Received trajectory goal with unknown type. Ignoring command.')
+            return GoalResponse.REJECT
+
+        return GoalResponse.ACCEPT
+
+    def trajectory_handle_accepted_callback(self, goal_handle):
+        with self.goal_lock:
+            if self.goal_handle is not None and self.goal_handle.is_active:
+                self.get_logger().info('Aborting previous goal')
+                self.goal_handle.abort()
+                self.trajectory_done_event.set()
+
+            self.goal_handle = goal_handle
+
+        goal_handle.execute()
+
+    def trajectory_cancel_callback(self, goal):
+        self.get_logger().info('Received trajectory cancel request')
+        return CancelResponse.ACCEPT
+
+    def trajectory_execute_callback_joint(self, goal_handle):
+        self.get_logger().info('Executing joint trajectory')
+        self.prepare_trajectory_joint(goal_handle.request.q)
+
+        self.trajectory_done_event.wait()
+        self.goal_handle.succeed()
+        self.trajectory_done_event.clear()
+
+        result = Trajectory.Result()
+        result.success = True
+        result.duration = self.trajectory_duration
+        result.progress = self.trajectory_progress
+
+        return result
+
+    def trajectory_execute_callback_pose(self, goal_handle):
+        if goal_handle.request.type == Trajectory.Goal.JOINT:
+            self.get_logger().info('Executing MoveJ trajectory')
+            self.prepare_trajectory_movej(goal_handle.request.x)
+        elif goal_handle.request.type == Trajectory.Goal.LINEAR:
+            self.get_logger().info('Executing MoveL trajectory')
+            self.prepare_trajectory_movel(goal_handle.request.x)
+        else:
+            self.get_logger().warning('Received trajectory goal with unknown type. Ignoring command.')
+            goal_handle.abort()
+
+        if not goal_handle.is_active:
+            self.get_logger().info('Trajectory goal was aborted before execution started.')
+            result = Trajectory.Result()
+            result.success = False
+            return result
+
+        self.trajectory_done_event.wait()
+        self.trajectory_done_event.clear()
+
+        if goal_handle.is_active:
+            self.goal_handle.succeed()
+
+        result = Trajectory.Result()
+        result.success = True
+        result.duration = self.trajectory_duration
+        result.progress = self.trajectory_progress
+
+        return result
+
+    def prepare_trajectory_joint(self, q):
+        targets = list(map(math.degrees, q.data))
+        diffs = [abs(a - b) for a, b in zip(targets, self.current_joint)]
+        max_distance = max(diffs)
+
+        if self.params.max_joint_acceleration > 0:
+            self.joint_profiles = [m3.VelocityProfileTrapezoidal(self.params.max_joint_velocity, self.params.max_joint_acceleration) for i in range(len(q.data))]
+            type_str = 'trapezoidal'
+        else:
+            self.joint_profiles = [m3.VelocityProfileRectangular(self.params.max_joint_velocity) for i in range(len(q.data))]
+            type_str = 'rectangular'
+
+        index = diffs.index(max_distance)
+        self.joint_profiles[index].set_profile(self.current_joint[index], targets[index])
+        self.trajectory_duration = self.joint_profiles[index].duration()
+
+        for i in range(len(q.data)):
+            self.joint_profiles[i].set_profile_duration(self.current_joint[i], targets[i], self.trajectory_duration)
+
+        self.trajectory_start_time = self.get_clock().now()
+        self.processing_trajectory = 'joint'
+
+        self.get_logger().info(f'Executing {type_str} joint trajectory. Duration: {self.trajectory_duration:.2f} s, max joint distance: {max_distance:.2f} deg.')
+
+    def prepare_trajectory_movej(self, pose):
+        q = kdl.JntArray(self.chain.getNrOfJoints())
+        qd = kdl.JntArray(self.chain.getNrOfJoints())
+
+        for i in range(len(self.current_joint)):
+            q[i] = math.radians(self.current_joint[i])
+
+        xd = kdl.Frame(kdl.Rotation.Quaternion(pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w),
+                       kdl.Vector(pose.position.x * 1000.0, pose.position.y * 1000.0, pose.position.z * 1000.0))
+
+        if self.ik_solver_pos.CartToJnt(q, xd, qd) >= 0:
+            qd_deg_str = ', '.join([f'{math.degrees(qd[i]):.2f}' for i in range(qd.rows())])
+            self.get_logger().info(f'IK solution found: [{qd_deg_str}] [deg]')
+            msg = Float32MultiArray()
+            msg.data = [qd[i] for i in range(qd.rows())]
+            self.prepare_trajectory_joint(msg)
+        else:
+            self.get_logger().warning('Inverse kinematics failed for the given target pose. Aborting command.')
+
+            if self.goal_handle is not None and self.goal_handle.is_active:
+                self.goal_handle.abort()
+
+    def prepare_trajectory_movel(self, pose):
         start_pos = kdl.Vector(self.current_pos[0], self.current_pos[1], self.current_pos[2])
         start_orient = kdl.Rotation.Quaternion(self.current_orient[1], self.current_orient[2], self.current_orient[3], self.current_orient[0])
 
-        end_pos = kdl.Vector(msg.position.x * 1000.0, msg.position.y * 1000.0, msg.position.z * 1000.0)
-        end_orient = kdl.Rotation.Quaternion(msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w)
+        end_pos = kdl.Vector(pose.position.x * 1000.0, pose.position.y * 1000.0, pose.position.z * 1000.0)
+        end_orient = kdl.Rotation.Quaternion(pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w)
 
         H_base_start = kdl.Frame(start_orient, start_pos)
         H_base_end = kdl.Frame(end_orient, end_pos)
@@ -230,93 +437,9 @@ class EGMDriver(Node):
 
         self.trajectory_start_time = self.get_clock().now()
         self.processing_trajectory = 'lin'
+        self.trajectory_duration = self.lin_trajectory.duration()
 
-        self.get_logger().info(f'Executing {type_str} linear trajectory. Duration: {self.lin_trajectory.duration():.2f} s, path length: {path.path_length():.2f} mm.')
-
-    def trajectory_movej_listener_callback(self, msg):
-        if self.current_joint is None:
-            self.get_logger().warning('Received joint command before robot state is available. Ignoring command.')
-            return
-
-        q = kdl.JntArray(self.chain.getNrOfJoints())
-        qd = kdl.JntArray(self.chain.getNrOfJoints())
-
-        for i in range(len(self.current_joint)):
-            q[i] = math.radians(self.current_joint[i])
-
-        xd = kdl.Frame(kdl.Rotation.Quaternion(msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w),
-                       kdl.Vector(msg.position.x * 1000.0, msg.position.y * 1000.0, msg.position.z * 1000.0))
-
-        if self.ik_solver_pos.CartToJnt(q, xd, qd) >= 0:
-            qd_deg_str = ', '.join([f'{math.degrees(qd[i]):.2f}' for i in range(qd.rows())])
-            self.get_logger().info(f'IK solution found: [{qd_deg_str}] [deg]')
-            msg = Float32MultiArray()
-            msg.data = [qd[i] for i in range(qd.rows())]
-            self.trajectory_joint_listener_callback(msg)
-        else:
-            self.get_logger().warning('Inverse kinematics failed for the given target pose. Ignoring command.')
-
-    def joint_listener_callback(self, msg):
-        if self.current_joint is None:
-            self.get_logger().warning('Received joint command before robot state is available. Ignoring command.')
-            return
-
-        if len(msg.data) != len(self.current_joint):
-            self.get_logger().warning(f'Received joint command with incorrect number of joints. Expected {len(self.current_joint)}, got {len(msg.data)}.')
-            return
-
-        if not self.using_dh_joint_cmd:
-            self.target_joint = list(map(math.degrees, msg.data))
-        elif len(msg.data) != self.chain.getNrOfJoints():
-            self.get_logger().warning(f'Received joint command with incorrect number of joints for DH model. Expected {self.chain.getNrOfJoints()}, got {len(msg.data)}.')
-        else:
-            self.target_pos, self.target_orient = self._solve_fk(msg.data)
-            self.processing_trajectory = None
-
-    def trajectory_joint_listener_callback(self, msg):
-        if self.current_joint is None:
-            self.get_logger().warning('Received joint trajectory before robot state is available. Ignoring command.')
-            return
-
-        if len(msg.data) != len(self.current_joint):
-            self.get_logger().warning(f'Received joint trajectory with incorrect number of joints. Expected {len(self.current_joint)}, got {len(msg.data)}.')
-            return
-
-        if len(msg.data) != self.chain.getNrOfJoints():
-            self.get_logger().warning(f'Received joint trajectory with incorrect number of joints for DH model. Expected {self.chain.getNrOfJoints()}, got {len(msg.data)}.')
-            return
-
-        targets = list(map(math.degrees, msg.data))
-        diffs = [abs(a - b) for a, b in zip(targets, self.current_joint)]
-        max_distance = max(diffs)
-
-        if self.params.max_joint_acceleration > 0:
-            self.joint_profiles = [m3.VelocityProfileTrapezoidal(self.params.max_joint_velocity, self.params.max_joint_acceleration) for i in range(len(msg.data))]
-            type_str = 'trapezoidal'
-        else:
-            self.joint_profiles = [m3.VelocityProfileRectangular(self.params.max_joint_velocity) for i in range(len(msg.data))]
-            type_str = 'rectangular'
-
-        index = diffs.index(max_distance)
-        self.joint_profiles[index].set_profile(self.current_joint[index], targets[index])
-        duration = self.joint_profiles[index].duration()
-
-        for i in range(len(msg.data)):
-            self.joint_profiles[i].set_profile_duration(self.current_joint[i], targets[i], duration)
-
-        self.trajectory_start_time = self.get_clock().now()
-        self.processing_trajectory = 'joint'
-
-        self.get_logger().info(f'Executing {type_str} joint trajectory. Duration: {duration:.2f} s, max joint distance: {max_distance:.2f} deg.')
-
-    def corr_listener_callback(self, msg):
-        self.target_corr = [msg.x * 1000.0, msg.y * 1000.0, msg.z * 1000.0]
-
-    def do_listener_callback(self, msg):
-        self.send_do = msg.data
-
-    def data_listener_callback(self, msg):
-        self.data_out = msg.data[:DATA_LENGTH]
+        self.get_logger().info(f'Executing {type_str} linear trajectory. Duration: {self.trajectory_duration:.2f} s, path length: {path.path_length():.2f} mm.')
 
     def timer_callback(self):
         if self.param_listener.is_old(self.params):
@@ -347,6 +470,17 @@ class EGMDriver(Node):
             data_msg.data = self.data_in
             self.publisher_data.publish(data_msg)
 
+        if self.goal_handle is not None and self.goal_handle.is_active:
+            if self.goal_handle.is_cancel_requested:
+                self.get_logger().info('Trajectory goal cancel requested')
+                self.goal_handle.canceled()
+                self.processing_trajectory = None
+                self.trajectory_done_event.set()
+            else:
+                feedback_msg = Trajectory.Feedback()
+                feedback_msg.progress = self.trajectory_progress
+                self.goal_handle.publish_feedback(feedback_msg)
+
     def filter(self, current, target):
         return current + (target - current) * self.params.smooth_factor
 
@@ -356,6 +490,15 @@ class EGMDriver(Node):
                 if self.processing_trajectory == 'joint' and self.joint_profiles is not None and self.trajectory_start_time is not None:
                     elapsed_time = (self.get_clock().now() - self.trajectory_start_time).nanoseconds * 1e-9
                     self.current_send_joint = [profile.position(elapsed_time) for profile in self.joint_profiles]
+                    self.target_joint = list(self.current_send_joint)
+                    self.trajectory_progress = min(elapsed_time / self.trajectory_duration, 1.0)
+
+                    if elapsed_time >= self.trajectory_duration:
+                        self.get_logger().info('Joint trajectory completed.')
+                        self.processing_trajectory = None
+
+                        if self.goal_handle is not None and self.goal_handle.is_active:
+                            self.trajectory_done_event.set()
                 else:
                     axes = len(self.current_send_joint) # type: ignore
                     self.current_send_joint = [self.filter(self.current_send_joint[i], self.target_joint[i]) for i in range(axes)] # type: ignore
@@ -366,12 +509,34 @@ class EGMDriver(Node):
                     elapsed_time = (self.get_clock().now() - self.trajectory_start_time).nanoseconds * 1e-9
                     H_base_tcp = self.lin_trajectory.position(elapsed_time)
                     q = H_base_tcp.M.GetQuaternion()
+
                     self.current_send_pos = [H_base_tcp.p.x(), H_base_tcp.p.y(), H_base_tcp.p.z()]
                     self.current_send_orient = [q[3], q[0], q[1], q[2]]
+                    self.target_pos = list(self.current_send_pos)
+                    self.target_orient = list(self.current_send_orient)
+                    self.trajectory_progress = min(elapsed_time / self.trajectory_duration, 1.0)
+
+                    if elapsed_time >= self.trajectory_duration:
+                        self.get_logger().info('MoveL trajectory completed.')
+                        self.processing_trajectory = None
+
+                        if self.goal_handle is not None and self.goal_handle.is_active:
+                            self.trajectory_done_event.set()
                 elif self.processing_trajectory == 'joint' and self.joint_profiles is not None and self.trajectory_start_time is not None:
                     elapsed_time = (self.get_clock().now() - self.trajectory_start_time).nanoseconds * 1e-9
                     joint_angles = [profile.position(elapsed_time) for profile in self.joint_profiles]
-                    self.current_send_pos, self.current_send_orient = self._solve_fk(list(map(math.radians, joint_angles)))
+
+                    self.current_send_pos, self.current_send_orient = self.solve_fk(list(map(math.radians, joint_angles)))
+                    self.target_pos = list(self.current_send_pos)
+                    self.target_orient = list(self.current_send_orient)
+                    self.trajectory_progress = min(elapsed_time / self.trajectory_duration, 1.0)
+
+                    if elapsed_time >= self.trajectory_duration:
+                        self.get_logger().info('MoveJ trajectory completed.')
+                        self.processing_trajectory = None
+
+                        if self.goal_handle is not None and self.goal_handle.is_active:
+                            self.trajectory_done_event.set()
                 else:
                     self.current_send_pos = [self.filter(self.current_send_pos[i], self.target_pos[i]) for i in range(3)] # type: ignore
                     self.current_send_orient = [self.filter(self.current_send_orient[i], self.target_orient[i]) for i in range(4)] # type: ignore
@@ -415,10 +580,11 @@ class EGMDriver(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = EGMDriver()
+    executor = MultiThreadedExecutor()
 
     try:
-        rclpy.spin(node)
-    except KeyboardInterrupt:
+        rclpy.spin(node, executor=executor)
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         node.running = False

@@ -4,11 +4,13 @@ ROS 2 drivers for ABB robots featuring Externally Guided Motion (EGM) in RobotWa
 
 ## Installation
 
-Set your ROS 2 environment as usual. Install the following mandatory dependencies, then proceed with `colcon build`:
+Install the following mandatory dependencies:
 
-```bashbash
+```bash
 pip install ABBRobotEGM PyKDL
 ```
+
+Then, set your ROS 2 environment as usual. You will need the [rl_cartesian_control_msgs](https://github.com/roboticslab-uc3m/rl_cartesian_controllers) package. Proceed with `colcon build`.
 
 ## Usage
 
