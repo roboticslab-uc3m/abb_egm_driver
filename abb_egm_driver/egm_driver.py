@@ -7,7 +7,7 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from geometry_msgs.msg import Point, Pose
 from std_msgs.msg import Float32MultiArray, Float64MultiArray, Bool
 from sensor_msgs.msg import JointState
-from rl_cartesian_control_msgs.action import Trajectory
+from rl_cartesian_control_msgs.action import JointTrajectory, PoseTrajectory
 from ABBRobotEGM import EGM
 from enum import Enum
 
@@ -70,6 +70,7 @@ class EGMDriver(Node):
         self.goal_handle = None
         self.goal_lock = threading.Lock()
         self.trajectory_done_event = threading.Event()
+        self.FeedBackType = None
 
         self.get_logger().info(f'Using EGM port: {self.params.egm_port}.')
         self.get_logger().info(f'Using smooth_factor: {self.params.smooth_factor}.')
@@ -96,12 +97,12 @@ class EGMDriver(Node):
         if self.params.command_mode == Mode.POSE.value:
             self.subscription_pose_cmd = self.create_subscription(Pose, 'command/pose', self.pose_listener_callback, 10)
 
-            self.action_server_traj = ActionServer(self, Trajectory, 'trajectory',
-                                                   goal_callback=self.trajectory_goal_callback_pose,
-                                                   handle_accepted_callback=self.trajectory_handle_accepted_callback,
-                                                   cancel_callback=self.trajectory_cancel_callback,
-                                                   execute_callback=self.trajectory_execute_callback_pose,
-                                                   callback_group=ReentrantCallbackGroup())
+            self.action_pose_traj = ActionServer(self, PoseTrajectory, 'trajectory/pose',
+                                                 goal_callback=self.trajectory_goal_callback_pose,
+                                                 handle_accepted_callback=self.trajectory_handle_accepted_callback,
+                                                 cancel_callback=self.trajectory_cancel_callback,
+                                                 execute_callback=self.trajectory_execute_callback_pose,
+                                                 callback_group=ReentrantCallbackGroup())
 
             self.get_logger().info(f'Using max_lin_velocity (trajectories): {self.params.max_lin_velocity} mm/s.')
             self.get_logger().info(f'Using max_lin_acceleration (trajectories): {self.params.max_lin_acceleration} mm/s^2.')
@@ -109,12 +110,12 @@ class EGMDriver(Node):
             if self.parse_kinematic_parameters():
                 self.subscription_joint_cmd = self.create_subscription(Float32MultiArray, 'command/joint', self.joint_listener_callback, 10)
 
-                # self.action_server_traj = ActionServer(self, Trajectory, 'trajectory',
-                #                                        goal_callback=self.trajectory_goal_callback_joint,
-                #                                        handle_accepted_callback=self.trajectory_handle_accepted_callback,
-                #                                        cancel_callback=self.trajectory_cancel_callback,
-                #                                        execute_callback=self.trajectory_execute_callback_joint,
-                #                                        callback_group=ReentrantCallbackGroup())
+                self.action_joint_traj = ActionServer(self, JointTrajectory, 'trajectory/joint',
+                                                      goal_callback=self.trajectory_goal_callback_joint,
+                                                      handle_accepted_callback=self.trajectory_handle_accepted_callback,
+                                                      cancel_callback=self.trajectory_cancel_callback,
+                                                      execute_callback=self.trajectory_execute_callback_joint,
+                                                      callback_group=ReentrantCallbackGroup())
 
                 self.get_logger().info(f'Using max_joint_velocity (trajectories): {self.params.max_joint_velocity} deg/s.')
                 self.get_logger().info(f'Using max_joint_acceleration (trajectories): {self.params.max_joint_acceleration} deg/s^2.')
@@ -127,23 +128,23 @@ class EGMDriver(Node):
         elif self.params.command_mode == Mode.JOINT.value:
             self.subscription_joint_cmd = self.create_subscription(Float32MultiArray, 'command/joint', self.joint_listener_callback, 10)
 
-            # self.action_server_traj = ActionServer(self, Trajectory, 'trajectory',
-            #                                        goal_callback=self.trajectory_goal_callback_joint,
-            #                                        handle_accepted_callback=self.trajectory_handle_accepted_callback,
-            #                                        cancel_callback=self.trajectory_cancel_callback,
-            #                                        execute_callback=self.trajectory_execute_callback_joint,
-            #                                        callback_group=ReentrantCallbackGroup())
+            self.action_joint_traj = ActionServer(self, JointTrajectory, 'trajectory/joint',
+                                                  goal_callback=self.trajectory_goal_callback_joint,
+                                                  handle_accepted_callback=self.trajectory_handle_accepted_callback,
+                                                  cancel_callback=self.trajectory_cancel_callback,
+                                                  execute_callback=self.trajectory_execute_callback_joint,
+                                                  callback_group=ReentrantCallbackGroup())
 
             self.get_logger().info(f'Using max_joint_velocity (trajectories): {self.params.max_joint_velocity} deg/s.')
             self.get_logger().info(f'Using max_joint_acceleration (trajectories): {self.params.max_joint_acceleration} deg/s^2.')
 
             if self.parse_kinematic_parameters():
-                self.action_server_traj = ActionServer(self, Trajectory, 'trajectory',
-                                                       goal_callback=self.trajectory_goal_callback_pose,
-                                                       handle_accepted_callback=self.trajectory_handle_accepted_callback,
-                                                       cancel_callback=self.trajectory_cancel_callback,
-                                                       execute_callback=self.trajectory_execute_callback_pose,
-                                                       callback_group=ReentrantCallbackGroup())
+                self.action_pose_traj = ActionServer(self, PoseTrajectory, 'trajectory/pose',
+                                                     goal_callback=self.trajectory_goal_callback_pose,
+                                                     handle_accepted_callback=self.trajectory_handle_accepted_callback,
+                                                     cancel_callback=self.trajectory_cancel_callback,
+                                                     execute_callback=self.trajectory_execute_callback_pose,
+                                                     callback_group=ReentrantCallbackGroup())
 
                 self.has_kinematics = True
                 self.get_logger().info('DH parameters provided, pose commands are enabled in joint command mode.')
@@ -284,12 +285,13 @@ class EGMDriver(Node):
             self.get_logger().warning(f'Received joint trajectory with incorrect number of joints for DH model. Expected {self.chain.getNrOfJoints()}, got {len(goal_request.data)}.')
             return GoalResponse.REJECT
 
+        self.FeedBackType = JointTrajectory.Feedback
         return GoalResponse.ACCEPT
 
     def trajectory_goal_callback_pose(self, goal_request):
         self.get_logger().info('Received pose trajectory goal request')
 
-        if goal_request.type == Trajectory.Goal.JOINT:
+        if goal_request.type == PoseTrajectory.Goal.JOINT:
             if not self.has_kinematics:
                 self.get_logger().warning('Received MoveJ trajectory but no valid DH parameters are provided. Ignoring command.')
                 return GoalResponse.REJECT
@@ -297,7 +299,7 @@ class EGMDriver(Node):
             if self.current_joint is None:
                 self.get_logger().warning('Received MoveJ trajectory before robot state is available. Ignoring command.')
                 return GoalResponse.REJECT
-        elif goal_request.type == Trajectory.Goal.LINEAR:
+        elif goal_request.type == PoseTrajectory.Goal.LINEAR:
             if self.current_pos is None or self.current_orient is None:
                 self.get_logger().warning('Received MoveL trajectory before robot state is available. Ignoring command.')
                 return GoalResponse.REJECT
@@ -305,6 +307,7 @@ class EGMDriver(Node):
             self.get_logger().warning('Received trajectory goal with unknown type. Ignoring command.')
             return GoalResponse.REJECT
 
+        self.FeedBackType = PoseTrajectory.Feedback
         return GoalResponse.ACCEPT
 
     def trajectory_handle_accepted_callback(self, goal_handle):
@@ -324,13 +327,15 @@ class EGMDriver(Node):
 
     def trajectory_execute_callback_joint(self, goal_handle):
         self.get_logger().info('Executing joint trajectory')
-        self.prepare_trajectory_joint(goal_handle.request.q)
+        self.prepare_trajectory_joint(goal_handle.request.position)
 
         self.trajectory_done_event.wait()
-        self.goal_handle.succeed()
         self.trajectory_done_event.clear()
 
-        result = Trajectory.Result()
+        if goal_handle.is_active:
+            self.goal_handle.succeed()
+
+        result = JointTrajectory.Result()
         result.success = True
         result.duration = self.trajectory_duration
         result.progress = self.trajectory_progress
@@ -338,19 +343,19 @@ class EGMDriver(Node):
         return result
 
     def trajectory_execute_callback_pose(self, goal_handle):
-        if goal_handle.request.type == Trajectory.Goal.JOINT:
+        if goal_handle.request.type == PoseTrajectory.Goal.JOINT:
             self.get_logger().info('Executing MoveJ trajectory')
-            self.prepare_trajectory_movej(goal_handle.request.x)
-        elif goal_handle.request.type == Trajectory.Goal.LINEAR:
+            self.prepare_trajectory_movej(goal_handle.request.pose)
+        elif goal_handle.request.type == PoseTrajectory.Goal.LINEAR:
             self.get_logger().info('Executing MoveL trajectory')
-            self.prepare_trajectory_movel(goal_handle.request.x)
+            self.prepare_trajectory_movel(goal_handle.request.pose)
         else:
             self.get_logger().warning('Received trajectory goal with unknown type. Ignoring command.')
             goal_handle.abort()
 
         if not goal_handle.is_active:
             self.get_logger().info('Trajectory goal was aborted before execution started.')
-            result = Trajectory.Result()
+            result = PoseTrajectory.Result()
             result.success = False
             return result
 
@@ -360,7 +365,7 @@ class EGMDriver(Node):
         if goal_handle.is_active:
             self.goal_handle.succeed()
 
-        result = Trajectory.Result()
+        result = PoseTrajectory.Result()
         result.success = True
         result.duration = self.trajectory_duration
         result.progress = self.trajectory_progress
@@ -368,22 +373,22 @@ class EGMDriver(Node):
         return result
 
     def prepare_trajectory_joint(self, q):
-        targets = list(map(math.degrees, q.data))
+        targets = list(map(math.degrees, q))
         diffs = [abs(a - b) for a, b in zip(targets, self.current_joint)]
         max_distance = max(diffs)
 
         if self.params.max_joint_acceleration > 0:
-            self.joint_profiles = [m3.VelocityProfileTrapezoidal(self.params.max_joint_velocity, self.params.max_joint_acceleration) for i in range(len(q.data))]
+            self.joint_profiles = [m3.VelocityProfileTrapezoidal(self.params.max_joint_velocity, self.params.max_joint_acceleration) for i in range(len(q))]
             type_str = 'trapezoidal'
         else:
-            self.joint_profiles = [m3.VelocityProfileRectangular(self.params.max_joint_velocity) for i in range(len(q.data))]
+            self.joint_profiles = [m3.VelocityProfileRectangular(self.params.max_joint_velocity) for i in range(len(q))]
             type_str = 'rectangular'
 
         index = diffs.index(max_distance)
         self.joint_profiles[index].set_profile(self.current_joint[index], targets[index])
         self.trajectory_duration = self.joint_profiles[index].duration()
 
-        for i in range(len(q.data)):
+        for i in range(len(q)):
             self.joint_profiles[i].set_profile_duration(self.current_joint[i], targets[i], self.trajectory_duration)
 
         self.trajectory_start_time = self.get_clock().now()
@@ -404,9 +409,8 @@ class EGMDriver(Node):
         if self.ik_solver_pos.CartToJnt(q, xd, qd) >= 0:
             qd_deg_str = ', '.join([f'{math.degrees(qd[i]):.2f}' for i in range(qd.rows())])
             self.get_logger().info(f'IK solution found: [{qd_deg_str}] [deg]')
-            msg = Float32MultiArray()
-            msg.data = [qd[i] for i in range(qd.rows())]
-            self.prepare_trajectory_joint(msg)
+            position = [qd[i] for i in range(qd.rows())]
+            self.prepare_trajectory_joint(position)
         else:
             self.get_logger().warning('Inverse kinematics failed for the given target pose. Aborting command.')
 
@@ -477,7 +481,7 @@ class EGMDriver(Node):
                 self.processing_trajectory = None
                 self.trajectory_done_event.set()
             else:
-                feedback_msg = Trajectory.Feedback()
+                feedback_msg = self.FeedBackType()
                 feedback_msg.progress = self.trajectory_progress
                 self.goal_handle.publish_feedback(feedback_msg)
 
