@@ -102,8 +102,8 @@ class EGMDriver(Node):
             self.subscription_pose_cmd = self.create_subscription(Pose, 'command/pose', self.pose_listener_callback, 10)
             self.subscription_data = self.create_subscription(Float64MultiArray, 'command/data', self.data_listener_callback, 10)
 
-            self.act_service = self.create_service(Act, 'act', self.act_service_callback)
-            self.stop_service = self.create_service(Trigger, 'stop', self.stop_service_callback)
+            self.act_service = self.create_service(Act, 'actuate_tool', self.act_service_callback)
+            self.stop_service = self.create_service(Trigger, 'stop_control', self.stop_service_callback)
 
             self.action_pose_traj = ActionServer(self, PoseTrajectory, 'trajectory/pose',
                                                  goal_callback=self.trajectory_goal_callback_pose,
@@ -137,7 +137,7 @@ class EGMDriver(Node):
         elif self.params.command_mode == Mode.JOINT.value:
             self.subscription_joint_cmd = self.create_subscription(Float32MultiArray, 'command/joint', self.joint_listener_callback, 10)
 
-            self.stop_service = self.create_service(Stop, 'stop', self.stop_service_callback)
+            self.stop_service = self.create_service(Stop, 'stop_control', self.stop_service_callback)
 
             self.action_joint_traj = ActionServer(self, JointTrajectory, 'trajectory/joint',
                                                   goal_callback=self.trajectory_goal_callback_joint,

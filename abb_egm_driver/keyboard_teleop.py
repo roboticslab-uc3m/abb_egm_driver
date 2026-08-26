@@ -74,7 +74,7 @@ class KeyboardCommander(Node):
         super().__init__('keyboard_teleop')
 
         self.pose_publisher = self.create_publisher(Pose, 'command/pose', 10)
-        self.act_client = self.create_client(Act, 'act')
+        self.act_client = self.create_client(Act, 'actuate_tool')
         self.trajectory_client = ActionClient(self, PoseTrajectory, 'trajectory/pose')
 
         self.pose_callback = self.create_subscription(Pose, 'state/pose', self.pose_listener_callback, 10)
