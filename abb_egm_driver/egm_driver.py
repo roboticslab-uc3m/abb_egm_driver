@@ -317,11 +317,10 @@ class EGMDriver(Node):
             self.processing_trajectory = None
             self.trajectory_done_event.set()
             self.get_logger().info('Ongoing trajectory aborted successfully.')
-            response.success = True
         else:
             self.get_logger().info('No active trajectory to stop.')
-            response.success = False
 
+        response.success = True
         return response
 
     def inv_service_callback(self, request, response):
