@@ -8,8 +8,8 @@ import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
 from geometry_msgs.msg import Pose
-from std_msgs.msg import Bool
 from sensor_msgs.msg import JointState
+from rl_cartesian_control_msgs.srv import Act
 from rl_cartesian_control_msgs.action import PoseTrajectory
 from PyKDL import Rotation
 
@@ -74,7 +74,7 @@ class KeyboardCommander(Node):
         super().__init__('keyboard_teleop')
 
         self.pose_publisher = self.create_publisher(Pose, 'command/pose', 10)
-        self.do_publisher = self.create_publisher(Bool, 'command/do', 10)
+        self.act_client = self.create_client(Act, 'act')
         self.trajectory_client = ActionClient(self, PoseTrajectory, 'trajectory/pose')
 
         self.pose_callback = self.create_subscription(Pose, 'state/pose', self.pose_listener_callback, 10)
@@ -122,9 +122,9 @@ class KeyboardCommander(Node):
         print(f'Target: X={self.x:.2f} Y={self.y:.2f} Z={self.z:.2f} [m] || QW={self.rw:.2f} QX={self.rx:.2f} QY={self.ry:.2f} QZ={self.rz:.2f}')
 
     def publish_do(self):
-        msg = Bool()
-        msg.data = self.do_state
-        self.do_publisher.publish(msg)
+        req = Act.Request()
+        req.cmd = Act.Request.CLOSE if self.do_state else Act.Request.OPEN
+        self.act_client.call_async(req)
         print(f'Tool {"ENABLED" if self.do_state else "DISABLED"}')
         self.do_state = not self.do_state # set for next toggle
 

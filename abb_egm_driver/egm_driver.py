@@ -5,9 +5,9 @@ from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
 from geometry_msgs.msg import Point, Pose
-from std_msgs.msg import Float32MultiArray, Float64MultiArray, Bool
+from std_msgs.msg import Float32MultiArray, Float64MultiArray
 from sensor_msgs.msg import JointState
-from rl_cartesian_control_msgs.srv import Inv
+from rl_cartesian_control_msgs.srv import Act, Inv
 from rl_cartesian_control_msgs.action import JointTrajectory, PoseTrajectory
 from ABBRobotEGM import EGM
 from enum import Enum
@@ -97,6 +97,7 @@ class EGMDriver(Node):
 
         if self.params.command_mode == Mode.POSE.value:
             self.subscription_pose_cmd = self.create_subscription(Pose, 'command/pose', self.pose_listener_callback, 10)
+            self.act_service = self.create_service(Act, 'act', self.act_service_callback)
 
             self.action_pose_traj = ActionServer(self, PoseTrajectory, 'trajectory/pose',
                                                  goal_callback=self.trajectory_goal_callback_pose,
@@ -158,7 +159,6 @@ class EGMDriver(Node):
             self.get_logger().error(f'Invalid command mode "{self.params.command_mode}". This should never happen due to parameter validation.')
 
         if self.params.command_mode != Mode.CORR.value:
-            self.subscription_do = self.create_subscription(Bool, 'command/do', self.do_listener_callback, 10)
             self.subscription_data = self.create_subscription(Float64MultiArray, 'command/data', self.data_listener_callback, 10)
 
         self.running = True
@@ -266,11 +266,23 @@ class EGMDriver(Node):
     def corr_listener_callback(self, msg):
         self.target_corr = [msg.x * 1000.0, msg.y * 1000.0, msg.z * 1000.0]
 
-    def do_listener_callback(self, msg):
-        self.send_do = msg.data
-
     def data_listener_callback(self, msg):
         self.data_out = msg.data[:DATA_LENGTH]
+
+    def act_service_callback(self, request, response):
+        self.get_logger().info(f'Received actuate tool request: {request.cmd}')
+
+        if request.cmd == Act.Request.CLOSE:
+            self.send_do = True
+        elif request.cmd == Act.Request.OPEN:
+            self.send_do = False
+        else:
+            self.get_logger().warning('Received actuate tool request with unsupported command. Ignoring command.')
+            response.success = False
+            return response
+
+        response.success = True
+        return response
 
     def inv_service_callback(self, request, response):
         self.get_logger().info('Received inverse kinematics request')
