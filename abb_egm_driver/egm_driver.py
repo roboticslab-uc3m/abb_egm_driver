@@ -209,20 +209,21 @@ class EGMDriver(Node):
 
         self.get_logger().info(f'Total DH parameters parsed successfully. Robot model has {self.chain.getNrOfJoints()} joints.')
 
-        tcp_x = self.params.tcp_frame.x
-        tcp_y = self.params.tcp_frame.y
-        tcp_z = self.params.tcp_frame.z
+        tool_x = self.params.tool_frame.x
+        tool_y = self.params.tool_frame.y
+        tool_z = self.params.tool_frame.z
 
-        tcp_roll = self.params.tcp_frame.roll
-        tcp_pitch = self.params.tcp_frame.pitch
-        tcp_yaw = self.params.tcp_frame.yaw
+        tool_qw = self.params.tool_frame.qw
+        tool_qx = self.params.tool_frame.qx
+        tool_qy = self.params.tool_frame.qy
+        tool_qz = self.params.tool_frame.qz
 
-        if any(param != 0.0 for param in [tcp_x, tcp_y, tcp_z, tcp_roll, tcp_pitch, tcp_yaw]):
-            self.get_logger().info(f'TCP frame provided: x={tcp_x} mm, y={tcp_y} mm, z={tcp_z} mm, roll={tcp_roll}°, pitch={tcp_pitch}°, yaw={tcp_yaw}°.')
-            tcp_rotation = kdl.Rotation.RPY(math.radians(tcp_roll), math.radians(tcp_pitch), math.radians(tcp_yaw))
-            tcp_translation = kdl.Vector(tcp_x, tcp_y, tcp_z)
-            tcp_frame = kdl.Frame(tcp_rotation, tcp_translation)
-            segment = kdl.Segment(kdl.Joint(kdl.Joint.Fixed), tcp_frame)
+        if any(param != 0.0 for param in [tool_x, tool_y, tool_z, tool_qx, tool_qy, tool_qz]):
+            self.get_logger().info(f'Tool frame provided: x={tool_x} mm, y={tool_y} mm, z={tool_z} mm, qw={tool_qw}, qx={tool_qx}, qy={tool_qy}, qz={tool_qz}.')
+            tool_rotation = kdl.Rotation.Quaternion(tool_qx, tool_qy, tool_qz, tool_qw)
+            tool_translation = kdl.Vector(tool_x, tool_y, tool_z)
+            tool_frame = kdl.Frame(tool_rotation, tool_translation)
+            segment = kdl.Segment(kdl.Joint(kdl.Joint.Fixed), tool_frame)
             self.chain.addSegment(segment)
 
         self.fk_solver_pos = kdl.ChainFkSolverPos_recursive(self.chain)

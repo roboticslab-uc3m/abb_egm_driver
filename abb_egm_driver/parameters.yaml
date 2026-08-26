@@ -99,34 +99,39 @@ egm_driver:
         default_value: 180.0
         description: "Maximum joint limit (in degrees)"
         read_only: true
-  tcp_frame:
+  tool_frame:
     x:
       type: double
       default_value: 0.0
-      description: "TCP frame X offset (in mm)"
+      description: "Tool frame X offset (in mm)"
       read_only: true
     y:
       type: double
       default_value: 0.0
-      description: "TCP frame Y offset (in mm)"
+      description: "Tool frame Y offset (in mm)"
       read_only: true
     z:
       type: double
       default_value: 0.0
-      description: "TCP frame Z offset (in mm)"
+      description: "Tool frame Z offset (in mm)"
       read_only: true
-    roll:
+    qw:
+      type: double
+      default_value: 1.0
+      description: "Tool frame quaternion w component"
+      read_only: true
+    qx:
       type: double
       default_value: 0.0
-      description: "TCP frame roll offset (in degrees)"
+      description: "Tool frame quaternion x component"
       read_only: true
-    pitch:
+    qy:
       type: double
       default_value: 0.0
-      description: "TCP frame pitch offset (in degrees)"
+      description: "Tool frame quaternion y component"
       read_only: true
-    yaw:
+    qz:
       type: double
       default_value: 0.0
-      description: "TCP frame yaw offset (in degrees)"
+      description: "Tool frame quaternion z component"
       read_only: true
