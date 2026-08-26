@@ -7,6 +7,7 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from geometry_msgs.msg import Point, Pose
 from std_msgs.msg import Float32MultiArray, Float64MultiArray, Bool
 from sensor_msgs.msg import JointState
+from rl_cartesian_control_msgs.srv import Inv
 from rl_cartesian_control_msgs.action import JointTrajectory, PoseTrajectory
 from ABBRobotEGM import EGM
 from enum import Enum
@@ -109,6 +110,7 @@ class EGMDriver(Node):
 
             if self.parse_kinematic_parameters():
                 self.subscription_joint_cmd = self.create_subscription(Float32MultiArray, 'command/joint', self.joint_listener_callback, 10)
+                self.ik_service = self.create_service(Inv, 'inv', self.inv_service_callback)
 
                 self.action_joint_traj = ActionServer(self, JointTrajectory, 'trajectory/joint',
                                                       goal_callback=self.trajectory_goal_callback_joint,
@@ -269,6 +271,28 @@ class EGMDriver(Node):
 
     def data_listener_callback(self, msg):
         self.data_out = msg.data[:DATA_LENGTH]
+
+    def inv_service_callback(self, request, response):
+        self.get_logger().info('Received inverse kinematics request')
+
+        q = kdl.JntArray(self.chain.getNrOfJoints())
+        qd = kdl.JntArray(self.chain.getNrOfJoints())
+
+        for i in range(len(self.current_joint)):
+            q[i] = math.radians(self.current_joint[i])
+
+        xd = kdl.Frame(kdl.Rotation.Quaternion(request.x.orientation.x, request.x.orientation.y, request.x.orientation.z, request.x.orientation.w),
+                       kdl.Vector(request.x.position.x * 1000.0, request.x.position.y * 1000.0, request.x.position.z * 1000.0))
+
+        if self.ik_solver_pos.CartToJnt(q, xd, qd) >= 0:
+            response.success = True
+            position = [qd[i] for i in range(qd.rows())]
+            response.q = position
+        else:
+            response.success = False
+            self.get_logger().warning('Inverse kinematics failed for the given target pose.')
+
+        return response
 
     def trajectory_goal_callback_joint(self, goal_request):
         self.get_logger().info('Received joint trajectory goal request')
