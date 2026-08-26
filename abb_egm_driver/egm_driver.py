@@ -6,6 +6,7 @@ from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
 from geometry_msgs.msg import Point, Pose
 from std_msgs.msg import Float32MultiArray, Float64MultiArray
+from std_srvs.srv import Trigger
 from sensor_msgs.msg import JointState
 from rl_cartesian_control_msgs.srv import Act, Inv
 from rl_cartesian_control_msgs.action import JointTrajectory, PoseTrajectory
@@ -102,6 +103,7 @@ class EGMDriver(Node):
             self.subscription_data = self.create_subscription(Float64MultiArray, 'command/data', self.data_listener_callback, 10)
 
             self.act_service = self.create_service(Act, 'act', self.act_service_callback)
+            self.stop_service = self.create_service(Trigger, 'stop', self.stop_service_callback)
 
             self.action_pose_traj = ActionServer(self, PoseTrajectory, 'trajectory/pose',
                                                  goal_callback=self.trajectory_goal_callback_pose,
@@ -134,6 +136,8 @@ class EGMDriver(Node):
                 self.get_logger().info('No valid DH parameters provided, joint commands are disabled in pose command mode.')
         elif self.params.command_mode == Mode.JOINT.value:
             self.subscription_joint_cmd = self.create_subscription(Float32MultiArray, 'command/joint', self.joint_listener_callback, 10)
+
+            self.stop_service = self.create_service(Stop, 'stop', self.stop_service_callback)
 
             self.action_joint_traj = ActionServer(self, JointTrajectory, 'trajectory/joint',
                                                   goal_callback=self.trajectory_goal_callback_joint,
@@ -283,6 +287,21 @@ class EGMDriver(Node):
             return response
 
         response.success = True
+        return response
+
+    def stop_service_callback(self, request, response):
+        self.get_logger().info('Received stop request. Stopping any ongoing trajectory.')
+
+        if self.goal_handle is not None and self.goal_handle.is_active:
+            self.goal_handle.abort()
+            self.processing_trajectory = None
+            self.trajectory_done_event.set()
+            self.get_logger().info('Ongoing trajectory aborted successfully.')
+            response.success = True
+        else:
+            self.get_logger().info('No active trajectory to stop.')
+            response.success = False
+
         return response
 
     def inv_service_callback(self, request, response):
