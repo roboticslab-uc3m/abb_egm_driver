@@ -8,7 +8,7 @@ from geometry_msgs.msg import Point, Pose, PoseStamped
 from std_msgs.msg import Float32MultiArray, Float64MultiArray
 from std_srvs.srv import Trigger
 from sensor_msgs.msg import JointState
-from rl_cartesian_control_msgs.srv import Act, Inv
+from rl_cartesian_control_msgs.srv import ActuateTool, SolvePose
 from rl_cartesian_control_msgs.action import JointTrajectory, PoseTrajectory
 from ABBRobotEGM import EGM
 from enum import Enum
@@ -67,7 +67,7 @@ class EGMDriver(Node):
         self.joint_profiles = None
         self.processing_trajectory = None
         self.trajectory_start_time = None
-        self.trajectory_duration = None
+        self.trajectory_duration = 0.0
         self.trajectory_progress = 1.0
 
         self.has_kinematics = False
@@ -104,7 +104,7 @@ class EGMDriver(Node):
             self.subscription_pose_cmd = self.create_subscription(Pose, 'command/pose', self.pose_listener_callback, 10)
             self.subscription_data = self.create_subscription(Float64MultiArray, 'command/data', self.data_listener_callback, 10)
 
-            self.act_service = self.create_service(Act, 'actuate_tool', self.act_service_callback)
+            self.act_service = self.create_service(ActuateTool, 'actuate_tool', self.act_service_callback)
             self.stop_service = self.create_service(Trigger, 'stop_control', self.stop_service_callback)
 
             self.action_pose_traj = ActionServer(self, PoseTrajectory, 'trajectory/pose',
@@ -119,7 +119,7 @@ class EGMDriver(Node):
 
             if self.parse_kinematic_parameters():
                 self.subscription_joint_cmd = self.create_subscription(Float32MultiArray, 'command/joint', self.joint_listener_callback, 10)
-                self.ik_service = self.create_service(Inv, 'inv', self.inv_service_callback)
+                self.ik_service = self.create_service(SolvePose, 'solve_pose', self.inv_service_callback)
 
                 self.action_joint_traj = ActionServer(self, JointTrajectory, 'trajectory/joint',
                                                       goal_callback=self.trajectory_goal_callback_joint,
@@ -139,7 +139,7 @@ class EGMDriver(Node):
         elif self.params.command_mode == Mode.JOINT.value:
             self.subscription_joint_cmd = self.create_subscription(Float32MultiArray, 'command/joint', self.joint_listener_callback, 10)
 
-            self.stop_service = self.create_service(Stop, 'stop_control', self.stop_service_callback)
+            self.stop_service = self.create_service(Trigger, 'stop_control', self.stop_service_callback)
 
             self.action_joint_traj = ActionServer(self, JointTrajectory, 'trajectory/joint',
                                                   goal_callback=self.trajectory_goal_callback_joint,
@@ -152,6 +152,8 @@ class EGMDriver(Node):
             self.get_logger().info(f'Using max_joint_acceleration (trajectories): {self.params.max_joint_acceleration} deg/s^2.')
 
             if self.parse_kinematic_parameters():
+                self.ik_service = self.create_service(SolvePose, 'solve_pose', self.inv_service_callback)
+
                 self.action_pose_traj = ActionServer(self, PoseTrajectory, 'trajectory/pose',
                                                      goal_callback=self.trajectory_goal_callback_pose,
                                                      handle_accepted_callback=self.trajectory_handle_accepted_callback,
@@ -295,11 +297,11 @@ class EGMDriver(Node):
         self.data_out = msg.data[:DATA_LENGTH]
 
     def act_service_callback(self, request, response):
-        self.get_logger().info(f'Received actuate tool request: {request.cmd}')
+        self.get_logger().info(f'Received actuate tool request: {request.command}')
 
-        if request.cmd == Act.Request.CLOSE:
+        if request.command == ActuateTool.Request.CLOSE:
             self.send_do = True
-        elif request.cmd == Act.Request.OPEN:
+        elif request.command == ActuateTool.Request.OPEN:
             self.send_do = False
         else:
             self.get_logger().warning('Received actuate tool request with unsupported command. Ignoring command.')
@@ -332,13 +334,13 @@ class EGMDriver(Node):
         for i in range(len(self.current_joint)):
             q[i] = math.radians(self.current_joint[i])
 
-        xd = kdl.Frame(kdl.Rotation.Quaternion(request.x.orientation.x, request.x.orientation.y, request.x.orientation.z, request.x.orientation.w),
-                       kdl.Vector(request.x.position.x * 1000.0, request.x.position.y * 1000.0, request.x.position.z * 1000.0))
+        xd = kdl.Frame(kdl.Rotation.Quaternion(request.pose.orientation.x, request.pose.orientation.y, request.pose.orientation.z, request.pose.orientation.w),
+                       kdl.Vector(request.pose.position.x * 1000.0, request.pose.position.y * 1000.0, request.pose.position.z * 1000.0))
 
         if self.ik_solver_pos.CartToJnt(q, xd, qd) >= 0:
             response.success = True
             position = [qd[i] for i in range(qd.rows())]
-            response.q = position
+            response.position = position
         else:
             response.success = False
             self.get_logger().warning('Inverse kinematics failed for the given target pose.')
@@ -408,7 +410,7 @@ class EGMDriver(Node):
         self.trajectory_done_event.clear()
 
         if goal_handle.is_active:
-            self.goal_handle.succeed()
+            goal_handle.succeed()
 
         result = JointTrajectory.Result()
         result.success = True
@@ -438,7 +440,7 @@ class EGMDriver(Node):
         self.trajectory_done_event.clear()
 
         if goal_handle.is_active:
-            self.goal_handle.succeed()
+            goal_handle.succeed()
 
         result = PoseTrajectory.Result()
         result.success = True
@@ -530,7 +532,7 @@ class EGMDriver(Node):
             joint_msg.position = list(map(math.radians, self.current_joint))
             self.publisher_joint.publish(joint_msg)
 
-        if self.current_pos is not None and self.current_orient is not None:
+        if self.current_pos is not None and self.current_orient is not None and self.state_timestamp is not None:
             pose_msg = PoseStamped()
 
             pose_msg.header.stamp.sec = self.state_timestamp.seconds
@@ -558,7 +560,7 @@ class EGMDriver(Node):
                 self.goal_handle.canceled()
                 self.processing_trajectory = None
                 self.trajectory_done_event.set()
-            else:
+            elif self.FeedBackType is not None:
                 feedback_msg = self.FeedBackType()
                 feedback_msg.progress = self.trajectory_progress
                 self.goal_handle.publish_feedback(feedback_msg)
