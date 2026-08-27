@@ -6,9 +6,11 @@ import threading
 import tty
 import rclpy
 from rclpy.node import Node
-from geometry_msgs.msg import Pose
-from std_msgs.msg import Bool
+from rclpy.action import ActionClient
+from geometry_msgs.msg import Pose, PoseStamped
 from sensor_msgs.msg import JointState
+from rl_cartesian_control_msgs.srv import Act
+from rl_cartesian_control_msgs.action import PoseTrajectory
 from PyKDL import Rotation
 
 help = """
@@ -72,10 +74,10 @@ class KeyboardCommander(Node):
         super().__init__('keyboard_teleop')
 
         self.pose_publisher = self.create_publisher(Pose, 'command/pose', 10)
-        self.do_publisher = self.create_publisher(Bool, 'command/do', 10)
-        self.trajectory_publisher = self.create_publisher(Pose, 'trajectory/movel', 10)
+        self.act_client = self.create_client(Act, 'actuate_tool')
+        self.trajectory_client = ActionClient(self, PoseTrajectory, 'trajectory/pose')
 
-        self.pose_callback = self.create_subscription(Pose, 'state/pose', self.pose_listener_callback, 10)
+        self.pose_callback = self.create_subscription(PoseStamped, 'state/pose', self.pose_listener_callback, 10)
         self.joint_callback = self.create_subscription(JointState, 'state/joint', self.joint_listener_callback, 10)
 
         self.state_pose = None
@@ -99,7 +101,7 @@ class KeyboardCommander(Node):
         print('Waiting for initial pose and joint state...')
 
     def pose_listener_callback(self, msg):
-        self.state_pose = copy.copy(msg)
+        self.state_pose = copy.copy(msg.pose)
 
     def joint_listener_callback(self, msg):
         self.state_joint = list(msg.position)
@@ -120,9 +122,9 @@ class KeyboardCommander(Node):
         print(f'Target: X={self.x:.2f} Y={self.y:.2f} Z={self.z:.2f} [m] || QW={self.rw:.2f} QX={self.rx:.2f} QY={self.ry:.2f} QZ={self.rz:.2f}')
 
     def publish_do(self):
-        msg = Bool()
-        msg.data = self.do_state
-        self.do_publisher.publish(msg)
+        req = Act.Request()
+        req.cmd = Act.Request.CLOSE if self.do_state else Act.Request.OPEN
+        self.act_client.call_async(req)
         print(f'Tool {"ENABLED" if self.do_state else "DISABLED"}')
         self.do_state = not self.do_state # set for next toggle
 
@@ -138,8 +140,27 @@ class KeyboardCommander(Node):
         pose.orientation.y = self.ry = HOME_RY
         pose.orientation.z = self.rz = HOME_RZ
 
-        self.trajectory_publisher.publish(pose)
-        print("RESET TO HOME!")
+        poseMsg = PoseTrajectory.Goal()
+        poseMsg.type = PoseTrajectory.Goal.JOINT
+        poseMsg.pose = pose
+
+        self.send_goal_future = self.trajectory_client.send_goal_async(poseMsg)
+        self.send_goal_future.add_done_callback(self.goal_response_callback)
+
+        print('RESET TO HOME! Wait...')
+
+    def goal_response_callback(self, future):
+        goal_handle = future.result()
+
+        if not goal_handle.accepted:
+            self.get_logger().info('Goal rejected')
+            return
+
+        self.get_result_future = goal_handle.get_result_async()
+        self.get_result_future.add_done_callback(self.get_result_callback)
+
+    def get_result_callback(self, future):
+        print('Done!')
 
 def do_key_action(node, settings):
     while True:

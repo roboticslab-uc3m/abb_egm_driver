@@ -12,6 +12,7 @@
   <depend>std_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>geometry_msgs</depend>
+  <depend>rl_cartesian_control_msgs</depend>
   <depend>generate_parameter_library</depend>
   <depend>generate_parameter_library_py</depend>
 

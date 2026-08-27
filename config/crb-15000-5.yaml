@@ -44,10 +44,19 @@ abb_egm_driver:
         alpha: 0.0
         min_limit: -270.0
         max_limit: 270.0
-    tcp_frame:
+    tool_frame:
       x: 0.0
       y: 0.0
       z: 0.0
-      roll: 0.0
-      pitch: 0.0
-      yaw: 0.0
+      qw: 1.0
+      qx: 0.0
+      qy: 0.0
+      qz: 0.0
+    wobj_frame:
+      x: 0.0
+      y: 0.0
+      z: 0.0
+      qw: 1.0
+      qx: 0.0
+      qy: 0.0
+      qz: 0.0
