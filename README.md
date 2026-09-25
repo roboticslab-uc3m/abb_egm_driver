@@ -58,9 +58,120 @@ On the other hand, `/stop_control` halts execution when the action server is pro
 The following action servers accepts low-frequency, point-to-point trajectory goals, driven by a velocity profile:
 
 - `/trajectory/joint` (rl_cartesian_control_msgs/JointTrajectory, only in **joint** and ***pose*** modes)
-- `/trajectory/pose` (rl_cartesian_control_msgs/JointTrajectory, only in ***joint*** and **pose** modes)
+- `/trajectory/pose` (rl_cartesian_control_msgs/PoseTrajectory, only in ***joint*** and **pose** modes)
 
 These actions accept joint and pose goals, respectively; the latter can operate in linear or unrestricted modes, resembling RAPID's MoveL and MoveJ commands, respectively. The `max_lin_velocity`/`max_joint_velocity` and `max_lin_acceleration`/`max_joint_acceleration` parameters can be set to configure the velocity profile of the trajectory (see below for details). Depending on `max_(lin|joint)_acceleration` being used or not, the trajectory will adhere to either a trapezoidal or rectangular velocity profile, respectively.
+
+### Mode compatibility matrix
+
+The following table summarizes the availability of topics, services and actions across all command modes. The ⚠️ icon means that the description of the robot kinematics must be provided on node launch.
+
+<table><thead>
+  <tr>
+    <th>command mode</th>
+    <th>joint</th>
+    <th>pose</th>
+    <th>path correction</th>
+    <th>type</th>
+  </tr></thead>
+<tbody>
+  <tr>
+    <td colspan="5" align="center">state feedback (topic publishers)</td>
+  </tr>
+  <tr>
+    <td>/state/pose</td>
+    <td align="center">✅</td>
+    <td align="center">✅</td>
+    <td align="center">✅</td>
+    <td>geometry_msgs/PoseStamped</td>
+  </tr>
+  <tr>
+    <td>/state/joint</td>
+    <td align="center">✅</td>
+    <td align="center">✅</td>
+    <td align="center">✅</td>
+    <td>sensor_msgs/JointState</td>
+  </tr>
+  <tr>
+    <td>/state/data</td>
+    <td align="center">❌</td>
+    <td align="center">✅</td>
+    <td align="center">❌</td>
+    <td>std_msgs/Float64MultiArray</td>
+  </tr>
+  <tr>
+    <td colspan="5" align="center">streaming commands (topic subscriptions)</td>
+  </tr>
+  <tr>
+    <td>/command/pose</td>
+    <td align="center">❌</td>
+    <td align="center">✅</td>
+    <td align="center">❌</td>
+    <td>geometry_msgs/Pose</td>
+  </tr>
+  <tr>
+    <td>/command/joint</td>
+    <td align="center">✅</td>
+    <td align="center">⚠️</td>
+    <td align="center">❌</td>
+    <td>std_msgs/Float32MultiArray</td>
+  </tr>
+  <tr>
+    <td>/command/path_corr</td>
+    <td align="center">❌</td>
+    <td align="center">❌</td>
+    <td align="center">✅</td>
+    <td>geometry_msgs/Point</td>
+  </tr>
+  <tr>
+    <td>/command/data</td>
+    <td align="center">❌</td>
+    <td align="center">✅</td>
+    <td align="center">❌</td>
+    <td>std_msgs/Float64MultiArray</td>
+  </tr>
+  <tr>
+    <td colspan="5" align="center">RPC commands (service calls)</td>
+  </tr>
+  <tr>
+    <td>/actuate_tool</td>
+    <td align="center">❌</td>
+    <td align="center">✅</td>
+    <td align="center">❌</td>
+    <td>rl_cartesian_control_msgs/ActuateTool</td>
+  </tr>
+  <tr>
+    <td>/stop_control</td>
+    <td align="center">✅</td>
+    <td align="center">✅</td>
+    <td align="center">❌</td>
+    <td>std_srvs/Trigger</td>
+  </tr>
+  <tr>
+    <td>/solve_pose</td>
+    <td align="center">⚠️</td>
+    <td align="center">⚠️</td>
+    <td align="center">❌</td>
+    <td>rl_cartesian_control_msgs/SolvePose</td>
+  </tr>
+  <tr>
+    <td colspan="5" align="center">trajectory commands (action servers)</td>
+  </tr>
+  <tr>
+    <td>/trajectory/joint</td>
+    <td align="center">✅</td>
+    <td align="center">⚠️</td>
+    <td align="center">❌</td>
+    <td>rl_cartesian_control_msgs/JointTrajectory</td>
+  </tr>
+  <tr>
+    <td>/trajectory/pose</td>
+    <td align="center">⚠️</td>
+    <td align="center">✅</td>
+    <td align="center">❌</td>
+    <td>rl_cartesian_control_msgs/PoseTrajectory</td>
+  </tr>
+</tbody></table>
 
 ### Configuration parameters
 
