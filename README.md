@@ -10,51 +10,74 @@ Install the following mandatory dependencies:
 pip install ABBRobotEGM PyKDL
 ```
 
-Then, set your ROS 2 environment as usual. You will need the [rl_cartesian_control_msgs](https://github.com/roboticslab-uc3m/rl_cartesian_controllers) package. Proceed with `colcon build`.
+Then, set your ROS 2 environment as usual. You will also need the [rl_cartesian_control_msgs](https://github.com/roboticslab-uc3m/rl_cartesian_controllers) package. Proceed with `colcon build`.
 
 ## Usage
 
+The availability of the following commands depends on the command mode configured on the RAPID side. To comply with it, the same command mode should be selected in the `egm_driver` node during initialization (`command_mode` parameter, as shown in the next sections).
+
+There are three command modes: **joint**, **pose** and **path correction**. The [rapid/](rapid) folder contains example RAPID code snippets for these command modes, which can be used as a template when implementing your own RAPID program. Use [JointCommander.modx](rapid/JointCommander.modx) for joint space control, [PoseCommander.modx](rapid/PoseCommander.modx) for task space control, and [PathCorrection.modx](rapid/PathCorrection.modx) for path correction mode.
+
+Keep in mind that certain commands require that the kinematic chain information has been provided (via `--params-file`) and correctly parsed. For those commands, their respective command mode has been ***italicized***.
+
 ### Streaming commands
 
-The ABB robot can be controlled in the joint or task space by publishing high-frequency (up to 250 Hz. i.e., every 4 ms) messages to either of the following topics; their availability depends on the command mode, which should be selected during initialization:
+The ABB robot can be controlled in the joint or task space by publishing high-frequency (up to 250 Hz. i.e., every 4 ms) messages to either of the following topics:
 
-- `command/pose` (geometry_msgs/Pose, only in **pose** mode)
-- `command/joint` (std_msgs/Float32MultiArray, only in **joint** mode)
-- `command/path_corr` (geometry_msgs/Point, only in **path correction** mode)
-- `command/do` (std_msgs/Bool, only in **joint** and **pose** modes)
-- `command/data` (std_msgs/Float64MultiArray, only in **joint** and **pose** modes)
+- `/command/pose` (geometry_msgs/Pose, only in **pose** mode)
+- `/command/joint` (std_msgs/Float32MultiArray, only in **joint** or ***pose*** modes)
+- `/command/path_corr` (geometry_msgs/Point, only in **path correction** mode)
+- `/command/data` (std_msgs/Float64MultiArray, only in **pose** mode)
 
-The [rapid/](rapid) folder contains example RAPID code snippets for both command modes, which can be used as a template when implementing your own RAPID program. Use [JointCommander.modx](rapid/JointCommander.modx) for joint space control, [PoseCommander.modx](rapid/PoseCommander.modx) for task space control, and [PathCorrection.modx](rapid/PathCorrection.modx) for path correction mode.
-
-A fourth command type is available to set a digital signal on the robot (via `command/do`), which can be used for triggering a tool, for instance. The driver will send a Boolean value together with the joint or pose command, so that they are executed simultaneously on the robot side. In order to use it, a new digital input (DI) signal must be registered in the robot configuration (I/O System > Signal), enabled in RAPID code through the `\DIFromSensor:=<name>` argument to `EGMActPose` or `EGMActJoint`, and then linked to the desired DO (I/O System > Cross Connection, then set the Resultant and Actor 1 properties accordingly).
-
-Finally, a fifth command type is available for sending custom data to the robot (via `command/data`). In order to use it, a new RAPID array variable must be declared in the global scope (e.g., `PERS dnum in_data{40};`), and then linked to the EGM input through the `\DataFromSensor:=<name>` argument to `EGMActPose` or `EGMActJoint`. On the robot side, you can read the data from that variable and use it as needed in your RAPID code.
-
-### Trajectory execution
-
-There is an additional topic, `trajectory/pose` (geometry_msgs/Pose), which allows to send a target pose to the robot at a lower frequency (e.g., 125 ms) when the driver is launched in **pose** mode. In this mode, the robot will continuously execute a predefined trajectory, i.e., a linear motion between the current and the desired poses. The `max_velocity` and `max_acceleration` parameters can be set to configure the velocity profile of the trajectory (see below for details). Depending on `max_acceleration` being used or not, the trajectory will adhere to either a trapezoidal or rectangular velocity profile, respectively.
+The last command type is available for sending custom data to the robot. In order to use it, a new RAPID array variable must be declared in the global scope (e.g., `PERS dnum in_data{40};`), and then linked to the EGM input through the `\DataFromSensor:=<name>` argument to `EGMActPose` or `EGMActJoint`. On the robot side, you can read the data from that variable and use it as needed in your RAPID code.
 
 ### State feedback
 
-Regardless of the command mode, current robot configuration in the joint and tasks spaces is always published on the following topics simultaneously:
+Regardless of the command mode, current robot configuration in the joint and tasks spaces is always published simultaneously:
 
-- `/state/pose` (geometry_msgs/Pose)
+- `/state/pose` (geometry_msgs/PoseStamped)
 - `/state/joint` (sensor_msgs/JointState)
-- `/state/data` (std_msgs/Float64MultiArray): custom array of 40 double values
+- `/state/data` (std_msgs/Float64MultiArray, only in **pose** mode): custom array of 40 double values
 
-The latter allows to read any custom data sent from the robot, such as the force/torque measurements from a wrist-mounted sensor, for instance. In order to use it, a new RAPID array variable must be declared in the global scope (e.g., `PERS dnum out_data{40};`), and then linked to the EGM output through the `\DataToSensor:=<name>` argument to `EGMActPose` or `EGMActJoint`. On the driver side, you can read the data from the `/state/data` topic and use it as needed in your ROS 2 application.
+The latter topic allows to read any custom data sent from the robot, such as the force/torque measurements from a wrist-mounted sensor, for instance. In order to use it, a new RAPID array variable must be declared in the global scope (e.g., `PERS dnum out_data{40};`), and then linked to the EGM output through the `\DataToSensor:=<name>` argument to `EGMActPose` or `EGMActJoint`. On the driver side, you can read the data from the `/state/data` topic and use it as needed in your ROS 2 application.
+
+### Service commands
+
+Certain low-frequency RPC-like commands have been implemented as services:
+
+- `/actuate_tool` (rl_cartesian_control_msgs/ActuateTool, only in **pose** mode)
+- `/stop_control` (std_srvs/Trigger, only in **joint** and **pose** modes)
+- `/solve_pose` (rl_cartesian_control_msgs/SolvePose, only in ***joint*** and ***pose*** modes)
+
+The `/actuate_tool` service sets a digital signal on the robot (via `command/do`), which can be used for triggering a tool, for instance. The driver will send a Boolean value together with the joint or pose command, so that they are executed simultaneously on the robot side. In order to use it, a new digital input (DI) signal must be registered in the robot configuration (I/O System > Signal), enabled in RAPID code through the `\DIFromSensor:=<name>` argument to `EGMActPose` or `EGMActJoint`, and then linked to the desired DO (I/O System > Cross Connection, then set the Resultant and Actor 1 properties accordingly).
+
+On the other hand, `/stop_control` halts execution when the action server is processing a new trajectory, and `/solve_pose` performs inverse kinematics on the supploed robot pose (only the nearest joint solution is provided, if any).
+
+### Trajectory execution
+
+The following action servers accepts low-frequency, point-to-point trajectory goals, driven by a velocity profile:
+
+- `/trajectory/joint` (rl_cartesian_control_msgs/JointTrajectory, only in **joint** and ***pose*** modes)
+- `/trajectory/pose` (rl_cartesian_control_msgs/JointTrajectory, only in ***joint*** and **pose** modes)
+
+These actions accept joint and pose goals, respectively; the latter can operate in linear or unrestricted modes, resembling RAPID's MoveL and MoveJ commands, respectively. The `max_lin_velocity`/`max_joint_velocity` and `max_lin_acceleration`/`max_joint_acceleration` parameters can be set to configure the velocity profile of the trajectory (see below for details). Depending on `max_(lin|joint)_acceleration` being used or not, the trajectory will adhere to either a trapezoidal or rectangular velocity profile, respectively.
 
 ### Configuration parameters
 
-The following parameters can be set when launching the driver and/or at runtime:
+The following parameters can be set when launching the driver and/or at runtime, refer to [abb_egm_driver/parameters.yaml](abb_egm_driver/parameters.yaml) for the actual list:
 
 - `egm_port` (int, default: 6510): UDP port number for EGM communication. Make sure it matches the port number configured in RobotStudio. **Read only.**
 - `smooth_factor` (double, default: 0.2): smoothing factor for the low-pass filter (exponential moving average) applied to the commanded trajectory, between 0 and 1. Lower values result in smoother trajectories, but also higher lag.
 - `publish_period` (integer, default: 10): period at which the robot state is published, in milliseconds. Zero or negative means the driver will not publish the state. **Read only.**
 - `command_mode` (string, default: "pose"): command mode, either "pose", "joint" or "corr". **Read only.**
 - `command_period` (integer, default: 24 in path correction mode, 4 otherwise): period at which the driver sends commands to the robot, in milliseconds. **Read only.**
-- `max_velocity` (double, default: 250 mm/s): maximum velocity for trajectory execution. **Pose mode only.**
-- `max_acceleration` (double, default: 200 mm/s^2): maximum acceleration for trajectory execution. If set to zero, the driver will use a rectangular velocity profile instead of a trapezoidal one. **Pose mode only.**
+- `max_lin_velocity` (double, default: 250 mm/s): maximum velocity for linear trajectory execution.
+- `max_lin_acceleration` (double, default: 200 mm/s^2): maximum acceleration for linear trajectory execution. If set to zero, the driver will use a rectangular velocity profile instead of a trapezoidal one.
+- `max_joint_velocity` (double, default: 25 deg/s): maximum velocity for joint trajectory execution.
+- `max_joint_acceleration` (double, default: 10 deg/s^2): maximum acceleration for joint trajectory execution. If set to zero, the driver will use a rectangular velocity profile instead of a trapezoidal one.
+- `dh_parameters` (list of lists): Denavit-Hartenberg parameters `theta`, `D`, `A`, `alpha`, and joint limits `min_limit` and `max_limit`. **Read only.**
+- `tool_frame` (list): H_N tool frame, encoded as `x`, `y`, `z` (in mm) and `qw`, `qx`, `qy`, `qz`. **Read only.**
+- `wobj_frame` (list): H_0_W work object frame, encoded as `x`, `y`, `z` (in mm) and `qw`, `qx`, `qy`, `qz`. **Read only.**
 
 In order to load configuration parameters from a YAML file, you can use the following command (DH parameters for the CRB 15000-5 robot are already provided in [config/crb-15000-5.yaml](config/crb-15000-5.yaml)):
 
@@ -91,8 +114,10 @@ ros2 run abb_egm_driver egm_driver --ros-args \
      -p publish_period:=10 \
      -p command_mode:=pose \
      -p command_period:=4 \
-     -p max_velocity:=250 \
-     -p max_acceleration:=200
+     -p max_lin_velocity:=250 \
+     -p max_lin_acceleration:=200 \
+     -p max_joint_velocity:=25 \
+     -p max_joint_velocity:=10
 
 ros2 run abb_egm_driver keyboard_teleop
 ```
@@ -132,3 +157,4 @@ In order to communicate WSL with RobotStudio, you might want to enable mirrored 
 ## See also
 
 - [https://github.com/roboticslab-uc3m/jr3_driver](roboticslab-uc3m/jr3_driver)
+- [https://github.com/roboticslab-uc3m/rl_cartesian_controllers](roboticslab-uc3m/rl_cartesian_controllers)
