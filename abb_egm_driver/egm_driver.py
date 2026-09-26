@@ -354,12 +354,12 @@ class EGMDriver(Node):
             self.get_logger().warning('Received joint trajectory before robot state is available. Ignoring command.')
             return GoalResponse.REJECT
 
-        if len(goal_request.data) != len(self.current_joint):
-            self.get_logger().warning(f'Received joint trajectory with incorrect number of joints. Expected {len(self.current_joint)}, got {len(goal_request.data)}.')
+        if len(goal_request.position) != len(self.current_joint):
+            self.get_logger().warning(f'Received joint trajectory with incorrect number of joints. Expected {len(self.current_joint)}, got {len(goal_request.position)}.')
             return GoalResponse.REJECT
 
-        if len(goal_request.data) != self.chain.getNrOfJoints():
-            self.get_logger().warning(f'Received joint trajectory with incorrect number of joints for DH model. Expected {self.chain.getNrOfJoints()}, got {len(goal_request.data)}.')
+        if len(goal_request.position) != self.chain.getNrOfJoints():
+            self.get_logger().warning(f'Received joint trajectory with incorrect number of joints for DH model. Expected {self.chain.getNrOfJoints()}, got {len(goal_request.position)}.')
             return GoalResponse.REJECT
 
         self.FeedBackType = JointTrajectory.Feedback
