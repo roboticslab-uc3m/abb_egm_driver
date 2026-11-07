@@ -635,11 +635,14 @@ class EGMDriver(Node):
             self.get_logger().info('Waiting response from robot...')
 
             while self.running:
-                success, state = egm.receive_from_robot()
+                success, state, skipped = egm.receive_latest()
 
                 if not success or state is None or state.cartesian is None:
                     self.get_logger().warning('Failed to receive robot state. Retrying...')
                     continue
+
+                if skipped > 0:
+                    self.get_logger().warning(f'Control loop is lagging behind, {skipped} message(s) skipped.')
 
                 self.state_timestamp = state.timestamp
 

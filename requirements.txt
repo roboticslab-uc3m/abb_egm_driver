@@ -1,0 +1,2 @@
+ABBRobotEGM >= 1.0.7
+PyKDL
