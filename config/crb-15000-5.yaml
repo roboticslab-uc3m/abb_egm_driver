@@ -1,4 +1,4 @@
-abb_egm_driver:
+/**:
   ros__parameters:
     mode: "pose"
     dh_parameters:
