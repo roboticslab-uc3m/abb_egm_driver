@@ -7,6 +7,7 @@ import tty
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
+from std_msgs.msg import Float32MultiArray
 from geometry_msgs.msg import Pose, PoseStamped
 from sensor_msgs.msg import JointState
 from rl_cartesian_control_msgs.srv import ActuateTool
@@ -14,18 +15,22 @@ from rl_cartesian_control_msgs.action import PoseTrajectory
 from PyKDL import Rotation
 
 help = """
----------------------------
-MANUAL CONTROL OF ABB ROBOT
----------------------------
+-----------------------------
+KEYBOARD CONTROL OF ABB ROBOT
+-----------------------------
 Translation:
-   w/s : +X/-X
-   a/d : +Y/-Y
-   q/e : +Z/-Z
+   s/x : +X/-X
+   z/c : +Y/-Y
+   a/d : +Z/-Z
 
 Rotation:
-   t/g : +RX/-RX
-   f/h : +RY/-RY
-   r/y : +RZ/-RZ
+   g/b : +RX/-RX
+   v/n : +RY/-RY
+   f/h : +RZ/-RZ
+
+Joints:
+   [1-7] : +q[i] (i=1..7)
+   [q-u] : -q[i] (i=1..7)
 
 p: print current pose
 j: print current joint configuration
@@ -36,22 +41,42 @@ SPACE: return to home
 ESC:   exit
 """
 
+# [m]
 TRANSLATE_BINDINGS = {
-    'w': ( 0.05,  0.0,  0.0),  # Forward (+X)
-    's': (-0.05,  0.0,  0.0),  # Backward (-X)
-    'a': ( 0.0,   0.05, 0.0),  # Left (+Y)
-    'd': ( 0.0,  -0.05, 0.0),  # Right (-Y)
-    'q': ( 0.0,   0.0,  0.05), # Up (+Z)
-    'e': ( 0.0,   0.0, -0.05), # Down (-Z)
+    's': ( 0.05,  0.0,  0.0),  # Forward (+X)
+    'x': (-0.05,  0.0,  0.0),  # Backward (-X)
+    'z': ( 0.0,   0.05, 0.0),  # Left (+Y)
+    'c': ( 0.0,  -0.05, 0.0),  # Right (-Y)
+    'a': ( 0.0,   0.0,  0.05), # Up (+Z)
+    'd': ( 0.0,   0.0, -0.05), # Down (-Z)
 }
 
+# [rad]
 ROTATE_BINDINGS = {
-    't': ( 0.05,  0.0,  0.0),  # Rotate +RX
-    'g': (-0.05,  0.0,  0.0),  # Rotate -RX
-    'f': ( 0.0,   0.05, 0.0),  # Rotate +RY
-    'h': ( 0.0,  -0.05, 0.0),  # Rotate -RY
-    'r': ( 0.0,   0.0,  0.05), # Rotate +RZ
-    'y': ( 0.0,   0.0, -0.05), # Rotate -RZ
+    'g': ( 0.05,  0.0,  0.0),  # Rotate +RX
+    'b': (-0.05,  0.0,  0.0),  # Rotate -RX
+    'v': ( 0.0,   0.05, 0.0),  # Rotate +RY
+    'n': ( 0.0,  -0.05, 0.0),  # Rotate -RY
+    'f': ( 0.0,   0.0,  0.05), # Rotate +RZ
+    'h': ( 0.0,   0.0, -0.05), # Rotate -RZ
+}
+
+# [rad]
+JOINT_BINDINGS = {
+    '1': ( 0.05,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0), # Rotate +q1
+    '2': ( 0.0,  0.05,  0.0,  0.0,  0.0,  0.0,  0.0), # Rotate +q2
+    '3': ( 0.0,  0.0,  0.05,  0.0,  0.0,  0.0,  0.0), # Rotate +q3
+    '4': ( 0.0,  0.0,  0.0,  0.05,  0.0,  0.0,  0.0), # Rotate +q4
+    '5': ( 0.0,  0.0,  0.0,  0.0,  0.05,  0.0,  0.0), # Rotate +q5
+    '6': ( 0.0,  0.0,  0.0,  0.0,  0.0,  0.05,  0.0), # Rotate +q6
+    '7': ( 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.05), # Rotate +q7
+    'q': (-0.05,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0), # Rotate -q1
+    'w': ( 0.0, -0.05,  0.0,  0.0,  0.0,  0.0,  0.0), # Rotate -q2
+    'e': ( 0.0,  0.0, -0.05,  0.0,  0.0,  0.0,  0.0), # Rotate -q3
+    'r': ( 0.0,  0.0,  0.0, -0.05,  0.0,  0.0,  0.0), # Rotate -q4
+    't': ( 0.0,  0.0,  0.0,  0.0, -0.05,  0.0,  0.0), # Rotate -q5
+    'y': ( 0.0,  0.0,  0.0,  0.0,  0.0, -0.05,  0.0), # Rotate -q6
+    'u': ( 0.0,  0.0,  0.0,  0.0,  0.0,  0.0, -0.05), # Rotate -q7
 }
 
 HOME_X = 0.45
@@ -74,6 +99,7 @@ class KeyboardCommander(Node):
         super().__init__('keyboard_teleop')
 
         self.pose_publisher = self.create_publisher(Pose, 'command/pose', 10)
+        self.joint_publisher = self.create_publisher(Float32MultiArray, 'command/joint', 10)
         self.act_client = self.create_client(ActuateTool, 'actuate_tool')
         self.trajectory_client = ActionClient(self, PoseTrajectory, 'trajectory/pose')
 
@@ -91,6 +117,8 @@ class KeyboardCommander(Node):
         self.rx = None
         self.ry = None
         self.rz = None
+
+        self.q = None
 
         self.do_state = False
 
@@ -120,6 +148,12 @@ class KeyboardCommander(Node):
 
         self.pose_publisher.publish(pose)
         print(f'Target: X={self.x:.2f} Y={self.y:.2f} Z={self.z:.2f} [m] || QW={self.rw:.2f} QX={self.rx:.2f} QY={self.ry:.2f} QZ={self.rz:.2f}')
+
+    def publish_joint(self):
+        msg = Float32MultiArray()
+        msg.data = self.q
+        self.joint_publisher.publish(msg)
+        print(f'Target Q={[f"{q:.2f}" for q in self.q]} [rad]')
 
     def publish_do(self):
         req = ActuateTool.Request()
@@ -182,6 +216,12 @@ def do_key_action(node, settings):
             node.rx, node.ry, node.rz, node.rw = rot.GetQuaternion()
             node.publish_pose()
 
+        elif key in JOINT_BINDINGS.keys():
+            dq = JOINT_BINDINGS[key]
+            for i in range(len(node.q)):
+                node.q[i] += dq[i]
+            node.publish_joint()
+
         elif key == '\r': # ENTER
             node.publish_do()
 
@@ -229,6 +269,8 @@ def main():
                 node.rx = node.state_pose.orientation.x
                 node.ry = node.state_pose.orientation.y
                 node.rz = node.state_pose.orientation.z
+
+                node.q = copy.copy(node.state_joint)
 
                 node.initialized = True
 
